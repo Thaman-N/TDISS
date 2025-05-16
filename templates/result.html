@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+
+{% block title %}Results - {{ result.filename }}{% endblock %}
+
+{% block head %}
+<!-- Include Chart.js for visualizations -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+    /* Custom styles for charts */
+    .grafana-chart {
+        background-color: #1f283e;
+        border-radius: 4px;
+        border: 1px solid #33425b;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="/" class="inline-flex items-center bg-grafana-panel px-3 py-2 rounded-md border border-grafana-border text-grafana-accent hover:text-grafana-accent-dark shadow-sm">
+        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+        </svg>
+        Back to Dashboard
+    </a>
+</div>
+
+<div class="bg-grafana-panel border border-grafana-border rounded-lg shadow-lg overflow-hidden">
+    <!-- Header with video info and thumbnail -->
+    <div class="bg-gradient-to-r from-grafana-bg to-grafana-panel p-6 border-b border-grafana-border flex flex-col md:flex-row justify-between items-center gap-6">
+        <div>
+            <h1 class="text-2xl font-bold text-grafana-accent">{{ result.filename }}</h1>
+            <p class="text-grafana-text-secondary mt-1">{{ result.timestamp }}</p>
+            
+            <div class="mt-4 space-y-1 text-grafana-text">
+                <div class="flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-grafana-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Duration: {{ result.metadata.duration_formatted }}</span>
+                </div>
+                <div class="flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-grafana-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    <span>Resolution: {{ result.metadata.width }}x{{ result.metadata.height }}</span>
+                </div>
+                <div class="flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-grafana-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    <span>Frames: {{ result.metadata.frame_count }} ({{ result.metadata.fps }} FPS)</span>
+                </div>
+            </div>
+            
+            <!-- Violence detection badge -->
+            <div class="mt-6">
+                {% if result.overall_result.is_fight or result.has_violence %}
+                <div class="inline-flex items-center px-4 py-2 rounded-md bg-grafana-red bg-opacity-20 border border-grafana-red text-grafana-red font-bold">
+                    <svg class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    Violence Detected ({{ "%.1f"|format(result.overall_result.confidence * 100) }}% confidence)
+                </div>
+                {% else %}
+                <div class="inline-flex items-center px-4 py-2 rounded-md bg-grafana-green bg-opacity-20 border border-grafana-green text-grafana-green font-bold">
+                    <svg class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                    No Violence Detected ({{ "%.1f"|format((1 - result.overall_result.confidence) * 100) }}% confidence)
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Thumbnail -->
+        <div class="w-full md:w-80 h-56 bg-grafana-bg rounded-lg overflow-hidden shadow-lg border border-grafana-border">
+            {% if result.thumbnail %}
+            <img src="{{ result.thumbnail }}" alt="{{ result.filename }}" class="w-full h-full object-cover opacity-90 hover:opacity-100 transition duration-150">
+            {% else %}
+            <div class="w-full h-full flex items-center justify-center">
+                <svg class="w-16 h-16 text-grafana-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Content -->
+    <div class="p-6">
+        <!-- Timeline visualization -->
+        <div class="mb-8">
+            <h2 class="text-xl font-bold text-grafana-accent mb-4 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Violence Timeline
+            </h2>
+            {% if result.segments and result.segments|length > 0 %}
+                <div class="bg-grafana-bg p-4 rounded-lg border border-grafana-border">
+                    <!-- Timeline chart -->
+                    <div class="h-20 mb-6 grafana-chart p-2">
+                        <canvas id="timelineChart"></canvas>
+                    </div>
+                    
+                    <!-- Segments list -->
+                    <div class="mt-6">
+                        <h3 class="text-lg font-semibold mb-3 text-grafana-text">Detected Segments</h3>
+                        <div class="space-y-4">
+                            {% for segment in result.segments %}
+                            <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border">
+                                <div class="flex justify-between items-center">
+                                    <div>
+                                        <div class="font-semibold text-grafana-text">
+                                            Segment {{ loop.index }}: {{ segment.start_formatted }} - {{ segment.end_formatted }}
+                                        </div>
+                                        <div class="text-sm text-grafana-text-secondary">
+                                            Duration: {{ "%.2f"|format(segment.end - segment.start) }} seconds
+                                        </div>
+                                    </div>
+                                    <div class="text-grafana-red font-bold">
+                                        {{ "%.1f"|format(segment.confidence * 100) }}% confidence
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            {% else %}
+                <div class="bg-grafana-bg border border-grafana-border rounded-lg p-6 text-center">
+                    <svg class="w-12 h-12 text-grafana-green mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <h3 class="text-lg font-semibold text-grafana-green mb-1">No Violence Detected</h3>
+                    <p class="text-grafana-text-secondary">This video appears to have no violent content.</p>
+                </div>
+            {% endif %}
+        </div>
+        
+        <!-- Performance metrics -->
+        <div class="mb-8">
+            <h2 class="text-xl font-bold text-grafana-accent mb-4 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                Analysis Performance
+            </h2>
+            <div class="bg-grafana-bg p-4 rounded-lg border border-grafana-border">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Inference Time</div>
+                        <div class="text-2xl font-bold text-grafana-text">{{ "%.2f"|format(result.overall_result.inference_time * 1000) }} ms</div>
+                    </div>
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Confidence</div>
+                        <div class="text-2xl font-bold text-grafana-text">{{ "%.1f"|format(result.overall_result.confidence * 100) }}%</div>
+                    </div>
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Effective FPS</div>
+                        <div class="text-2xl font-bold text-grafana-text">{{ "%.1f"|format(1 / result.overall_result.inference_time) }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Video information -->
+        <div>
+            <h2 class="text-xl font-bold text-grafana-accent mb-4 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Video Information
+            </h2>
+            <div class="bg-grafana-bg p-4 rounded-lg border border-grafana-border">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Filename</div>
+                        <div class="text-lg font-medium text-grafana-text break-all">{{ result.filename }}</div>
+                    </div>
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Path</div>
+                        <div class="text-lg font-medium text-grafana-text break-all">{{ result.video_path }}</div>
+                    </div>
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Resolution</div>
+                        <div class="text-lg font-medium text-grafana-text">{{ result.metadata.width }}x{{ result.metadata.height }}</div>
+                    </div>
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Duration</div>
+                        <div class="text-lg font-medium text-grafana-text">{{ result.metadata.duration_formatted }} ({{ "%.2f"|format(result.metadata.duration) }} seconds)</div>
+                    </div>
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Frame Rate</div>
+                        <div class="text-lg font-medium text-grafana-text">{{ "%.2f"|format(result.metadata.fps) }} FPS</div>
+                    </div>
+                    <div class="bg-grafana-panel p-4 rounded-lg border border-grafana-border shadow-sm">
+                        <div class="text-sm text-grafana-text-secondary">Frame Count</div>
+                        <div class="text-lg font-medium text-grafana-text">{{ result.metadata.frame_count }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Create timeline visualization if there are segments
+    {% if result.segments and result.segments|length > 0 %}
+    document.addEventListener('DOMContentLoaded', function() {
+        const ctx = document.getElementById('timelineChart').getContext('2d');
+        
+        // Set Chart.js defaults for Grafana-like look
+        Chart.defaults.color = '#8e9aaf';
+        Chart.defaults.font.family = "'Inter', 'Helvetica', 'Arial', sans-serif";
+        
+        // Prepare data for visualization
+        const videoDuration = {{ result.metadata.duration }};
+        const segments = {{ result.segments|tojson }};
+        
+        // Create dataset for background (full timeline)
+        const backgroundData = [];
+        for (let i = 0; i < 100; i++) {
+            backgroundData.push({
+                x: (i / 100) * videoDuration,
+                y: 0.1
+            });
+        }
+        
+        // Create dataset for violence segments
+        const segmentData = [];
+        segments.forEach(segment => {
+            // Add points at segment boundaries for sharper transitions
+            segmentData.push({
+                x: segment.start - 0.01,
+                y: 0
+            });
+            
+            // Start of segment
+            segmentData.push({
+                x: segment.start,
+                y: segment.confidence
+            });
+            
+            // End of segment
+            segmentData.push({
+                x: segment.end,
+                y: segment.confidence
+            });
+            
+            // Add points at segment boundaries for sharper transitions
+            segmentData.push({
+                x: segment.end + 0.01,
+                y: 0
+            });
+        });
+        
+        // Sort by x value to ensure correct line drawing
+        segmentData.sort((a, b) => a.x - b.x);
+        
+        // Create gradient for violence segments
+        const gradient = ctx.createLinearGradient(0, 0, 0, 100);
+        gradient.addColorStop(0, 'rgba(255, 82, 134, 0.8)'); // Grafana red
+        gradient.addColorStop(1, 'rgba(255, 82, 134, 0.1)');
+        
+        // Create chart
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [
+                    {
+                        label: 'Timeline',
+                        data: backgroundData,
+                        borderColor: 'rgba(51, 66, 91, 0.8)', // grafana-border
+                        backgroundColor: 'rgba(51, 66, 91, 0.2)',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        fill: true
+                    },
+                    {
+                        label: 'Violence',
+                        data: segmentData,
+                        borderColor: 'rgba(255, 82, 134, 0.8)', // grafana-red
+                        backgroundColor: gradient,
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'linear',
+                        position: 'bottom',
+                        min: 0,
+                        max: videoDuration,
+                        grid: {
+                            color: 'rgba(51, 66, 91, 0.3)' // grafana-border with opacity
+                        },
+                        title: {
+                            display: true,
+                            text: 'Time (seconds)',
+                            color: '#8e9aaf' // grafana-text-secondary
+                        },
+                        ticks: {
+                            color: '#8e9aaf', // grafana-text-secondary
+                            callback: function(value) {
+                                const minutes = Math.floor(value / 60);
+                                const seconds = Math.floor(value % 60);
+                                return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                            }
+                        }
+                    },
+                    y: {
+                        min: 0,
+                        max: 1,
+                        display: false
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(31, 40, 62, 0.9)', // grafana-panel
+                        borderColor: 'rgba(51, 66, 91, 1)', // grafana-border
+                        borderWidth: 1,
+                        titleColor: '#d8d9da', // grafana-text
+                        bodyColor: '#d8d9da', // grafana-text
+                        callbacks: {
+                            title: function(context) {
+                                const value = context[0].parsed.x;
+                                const minutes = Math.floor(value / 60);
+                                const seconds = Math.floor(value % 60);
+                                return `Time: ${minutes}:${seconds.toString().padStart(2, '0')}`;
+                            },
+                            label: function(context) {
+                                if (context.datasetIndex === 1 && context.parsed.y > 0.1) {
+                                    return `Confidence: ${(context.parsed.y * 100).toFixed(1)}%`;
+                                }
+                                return '';
+                            }
+                        }
+                    }
+                },
+                elements: {
+                    line: {
+                        tension: 0.2
+                    }
+                }
+            }
+        });
+    });
+    {% endif %}
+</script>
+{% endblock %}

@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+
+{% block title %}Detection History{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex justify-between items-center">
+    <h1 class="text-2xl font-bold text-grafana-accent">Violence Detection History</h1>
+    <a href="/" class="inline-flex items-center text-grafana-accent hover:text-grafana-accent-dark bg-grafana-panel px-3 py-2 rounded-md border border-grafana-border shadow-sm">
+        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+        </svg>
+        Back to Dashboard
+    </a>
+</div>
+
+<div class="bg-grafana-panel rounded-lg shadow-lg border border-grafana-border p-6">
+    <!-- Search and Filter -->
+    <div class="flex flex-col sm:flex-row justify-between items-center mb-6">
+        <!-- Search box -->
+        <div class="relative w-full sm:w-64 mb-4 sm:mb-0">
+            <input type="text" id="searchInput" placeholder="Search filenames..." 
+                   class="w-full pl-10 pr-4 py-2 bg-grafana-bg border border-grafana-border rounded-md focus:ring-2 focus:ring-grafana-accent focus:border-grafana-accent text-grafana-text">
+            <div class="absolute left-3 top-2.5 text-grafana-text-secondary">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+            </div>
+        </div>
+        
+        <!-- Filters -->
+        <div class="flex space-x-2">
+            <button id="showAllBtn" class="px-4 py-2 bg-grafana-accent text-white rounded-md hover:bg-grafana-accent-dark transition duration-150 filter-btn active">
+                All
+            </button>
+            <button id="showViolenceBtn" class="px-4 py-2 bg-grafana-bg text-grafana-text border border-grafana-border rounded-md hover:border-grafana-accent transition duration-150 filter-btn">
+                Violence
+            </button>
+            <button id="showNonViolenceBtn" class="px-4 py-2 bg-grafana-bg text-grafana-text border border-grafana-border rounded-md hover:border-grafana-accent transition duration-150 filter-btn">
+                Non-Violence
+            </button>
+        </div>
+    </div>
+    
+    <!-- History Grid -->
+    <div id="historyGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {% for item in history %}
+        <div class="bg-grafana-bg border border-grafana-border rounded-lg overflow-hidden hover:border-grafana-accent transition duration-150 history-item"
+             data-has-violence="{{ 'true' if item.has_violence else 'false' }}"
+             data-filename="{{ item.filename|lower }}">
+            <a href="/result/{{ item.job_id }}" class="block">
+                <div class="h-48 bg-grafana-bg relative">
+                    {% if item.thumbnail %}
+                    <img src="{{ item.thumbnail }}" alt="{{ item.filename }}" class="w-full h-full object-cover opacity-90 hover:opacity-100 transition duration-150">
+                    {% else %}
+                    <div class="w-full h-full flex items-center justify-center bg-grafana-bg">
+                        <svg class="w-12 h-12 text-grafana-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    {% endif %}
+                    <div class="absolute top-2 right-2">
+                        {% if item.has_violence %}
+                        <span class="bg-grafana-red bg-opacity-90 text-white px-2 py-1 rounded-full text-xs font-bold">Violence Detected</span>
+                        {% else %}
+                        <span class="bg-grafana-green bg-opacity-90 text-white px-2 py-1 rounded-full text-xs font-bold">No Violence</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="p-4">
+                    <h3 class="font-semibold truncate text-grafana-text" title="{{ item.filename }}">{{ item.filename }}</h3>
+                    <p class="text-sm text-grafana-text-secondary mt-1">{{ item.timestamp }}</p>
+                </div>
+            </a>
+        </div>
+        {% else %}
+        <div class="col-span-full text-center py-12 text-grafana-text-secondary bg-grafana-bg border border-grafana-border rounded-lg">
+            <svg class="w-16 h-16 mx-auto mb-4 text-grafana-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+            </svg>
+            <p class="text-lg font-medium">No results found</p>
+            <p class="mt-2">Process some videos to see results here.</p>
+        </div>
+        {% endfor %}
+    </div>
+    
+    <!-- No Results Placeholder (hidden by default) -->
+    <div id="noResultsMessage" class="hidden text-center py-12 text-grafana-text-secondary bg-grafana-bg border border-grafana-border rounded-lg mt-6">
+        <svg class="w-16 h-16 mx-auto mb-4 text-grafana-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p class="text-lg font-medium">No matching results</p>
+        <p class="mt-2">Try changing your search or filter criteria.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const searchInput = document.getElementById('searchInput');
+        const showAllBtn = document.getElementById('showAllBtn');
+        const showViolenceBtn = document.getElementById('showViolenceBtn');
+        const showNonViolenceBtn = document.getElementById('showNonViolenceBtn');
+        const historyItems = document.querySelectorAll('.history-item');
+        const historyGrid = document.getElementById('historyGrid');
+        const noResultsMessage = document.getElementById('noResultsMessage');
+        
+        let currentFilter = 'all';
+        let searchTerm = '';
+        
+        // Filter functions
+        function applyFilters() {
+            let visibleCount = 0;
+            
+            historyItems.forEach(item => {
+                const hasViolence = item.dataset.hasViolence === 'true';
+                const filename = item.dataset.filename;
+                
+                let matchesFilter = true;
+                let matchesSearch = true;
+                
+                // Apply violence filter
+                if (currentFilter === 'violence' && !hasViolence) {
+                    matchesFilter = false;
+                } else if (currentFilter === 'nonviolence' && hasViolence) {
+                    matchesFilter = false;
+                }
+                
+                // Apply search filter
+                if (searchTerm && !filename.includes(searchTerm.toLowerCase())) {
+                    matchesSearch = false;
+                }
+                
+                // Show or hide item
+                if (matchesFilter && matchesSearch) {
+                    item.classList.remove('hidden');
+                    visibleCount++;
+                } else {
+                    item.classList.add('hidden');
+                }
+            });
+            
+            // Show no results message if needed
+            if (visibleCount === 0 && historyItems.length > 0) {
+                noResultsMessage.classList.remove('hidden');
+                
+                // Only hide the "No results found" content if we're filtering
+                if (searchTerm || currentFilter !== 'all') {
+                    const originalNoResults = historyGrid.querySelector('.col-span-full');
+                    if (originalNoResults) {
+                        originalNoResults.classList.add('hidden');
+                    }
+                }
+            } else {
+                noResultsMessage.classList.add('hidden');
+                
+                // Show the original "No results found" content if it exists
+                const originalNoResults = historyGrid.querySelector('.col-span-full');
+                if (originalNoResults) {
+                    originalNoResults.classList.remove('hidden');
+                }
+            }
+        }
+        
+        // Event listeners
+        searchInput.addEventListener('input', function() {
+            searchTerm = this.value.trim();
+            applyFilters();
+        });
+        
+        // Filter button click handlers
+        function setActiveFilter(button, filter) {
+            // Remove active class from all buttons
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('active', 'bg-grafana-accent', 'text-white');
+                btn.classList.add('bg-grafana-bg', 'text-grafana-text', 'border', 'border-grafana-border');
+            });
+            
+            // Add active class to clicked button
+            button.classList.remove('bg-grafana-bg', 'text-grafana-text', 'border', 'border-grafana-border');
+            button.classList.add('active', 'bg-grafana-accent', 'text-white');
+            
+            // Set current filter
+            currentFilter = filter;
+            applyFilters();
+        }
+        
+        showAllBtn.addEventListener('click', function() {
+            setActiveFilter(this, 'all');
+        });
+        
+        showViolenceBtn.addEventListener('click', function() {
+            setActiveFilter(this, 'violence');
+        });
+        
+        showNonViolenceBtn.addEventListener('click', function() {
+            setActiveFilter(this, 'nonviolence');
+        });
+        
+        // Apply default filters
+        applyFilters();
+    });
+</script>
+{% endblock %}

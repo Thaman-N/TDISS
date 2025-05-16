@@ -1,0 +1,410 @@
+import { useState, useEffect, useRef } from 'react';
+import { Bell, Camera, Play, Pause, Upload, Clock, AlertTriangle, Info, ChevronRight, Settings, PlusCircle, X, MoreVertical, Maximize } from 'lucide-react';
+
+// Main Dashboard Component
+export default function SurveillanceDashboard() {
+  const [mode, setMode] = useState('monitoring'); // 'monitoring' or 'analysis'
+  const [cameras, setCameras] = useState([
+    { id: 1, name: 'Main Entrance', status: 'active', isLive: true, alertLevel: 'normal', thumbnail: '/api/placeholder/400/300', videoPath: '/path/to/video1.mp4' },
+    { id: 2, name: 'Parking Lot', status: 'active', isLive: true, alertLevel: 'warning', thumbnail: '/api/placeholder/400/300', videoPath: '/path/to/video2.mp4' },
+    { id: 3, name: 'Building A Hallway', status: 'active', isLive: false, alertLevel: 'normal', thumbnail: '/api/placeholder/400/300', videoPath: '/path/to/video3.mp4' },
+    { id: 4, name: 'South Entrance', status: 'inactive', isLive: false, alertLevel: 'normal', thumbnail: '/api/placeholder/400/300', videoPath: '/path/to/video4.mp4' },
+  ]);
+  const [alerts, setAlerts] = useState([
+    { id: 1, cameraId: 2, level: 'high', message: 'Violence detected', timestamp: new Date(Date.now() - 120000).toLocaleTimeString(), acknowledged: false },
+    { id: 2, cameraId: 1, level: 'medium', message: 'Suspicious activity', timestamp: new Date(Date.now() - 300000).toLocaleTimeString(), acknowledged: true },
+    { id: 3, cameraId: 3, level: 'low', message: 'Camera offline', timestamp: new Date(Date.now() - 600000).toLocaleTimeString(), acknowledged: true },
+  ]);
+  const [showAddCamera, setShowAddCamera] = useState(false);
+  const [activeCamera, setActiveCamera] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const fileInputRef = useRef(null);
+
+  // Simulate new alerts
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (Math.random() > 0.7) {
+        const cameraId = Math.floor(Math.random() * cameras.length) + 1;
+        const newAlert = {
+          id: Date.now(),
+          cameraId,
+          level: Math.random() > 0.3 ? 'high' : 'medium',
+          message: Math.random() > 0.5 ? 'Violence detected' : 'Suspicious activity',
+          timestamp: new Date().toLocaleTimeString(),
+          acknowledged: false
+        };
+        setAlerts(prev => [newAlert, ...prev.slice(0, 19)]); // Keep last 20 alerts
+        
+        // Update camera alert level
+        if (newAlert.level === 'high') {
+          setCameras(prev => 
+            prev.map(cam => 
+              cam.id === cameraId ? {...cam, alertLevel: 'alert'} : cam
+            )
+          );
+        }
+      }
+    }, 10000);
+    
+    return () => clearInterval(interval);
+  }, [cameras]);
+
+  // Simulate upload progress
+  const simulateUpload = () => {
+    setUploadProgress(0);
+    const interval = setInterval(() => {
+      setUploadProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          setTimeout(() => {
+            setCameras(prev => [
+              ...prev,
+              { 
+                id: prev.length + 1, 
+                name: `New Camera ${prev.length + 1}`, 
+                status: 'active', 
+                isLive: true, 
+                alertLevel: 'normal', 
+                thumbnail: '/api/placeholder/400/300',
+                videoPath: '/path/to/new-video.mp4'
+              }
+            ]);
+            setUploadProgress(0);
+            setShowAddCamera(false);
+          }, 1000);
+          return 100;
+        }
+        return prev + 5;
+      });
+    }, 200);
+  };
+
+  // Handle file upload
+  const handleFileUpload = (e) => {
+    if (e.target.files.length) {
+      simulateUpload();
+    }
+  };
+
+  // Toggle camera status
+  const toggleCamera = (id) => {
+    setCameras(prev => 
+      prev.map(cam => 
+        cam.id === id ? {...cam, isLive: !cam.isLive} : cam
+      )
+    );
+  };
+
+  // Acknowledge alert
+  const acknowledgeAlert = (id) => {
+    setAlerts(prev => 
+      prev.map(alert => 
+        alert.id === id ? {...alert, acknowledged: true} : alert
+      )
+    );
+  };
+
+  // Remove camera
+  const removeCamera = (id) => {
+    setCameras(prev => prev.filter(cam => cam.id !== id));
+  };
+
+  // Set active camera for full view
+  const handleCameraClick = (camera) => {
+    if (mode === 'monitoring') {
+      setActiveCamera(camera);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-900 text-white overflow-hidden">
+      {/* Header */}
+      <header className="bg-gray-800 px-4 py-3 flex justify-between items-center border-b border-gray-700">
+        <div className="flex items-center space-x-4">
+          <Camera className="h-7 w-7 text-blue-400" />
+          <h1 className="text-xl font-bold">Real-Time Surveillance System</h1>
+        </div>
+        
+        <div className="flex space-x-4 items-center">
+          <div className="flex bg-gray-700 rounded-md overflow-hidden">
+            <button 
+              className={`px-4 py-2 ${mode === 'monitoring' ? 'bg-blue-600' : 'hover:bg-gray-600'}`}
+              onClick={() => setMode('monitoring')}
+            >
+              Live Monitoring
+            </button>
+            <button 
+              className={`px-4 py-2 ${mode === 'analysis' ? 'bg-blue-600' : 'hover:bg-gray-600'}`}
+              onClick={() => setMode('analysis')}
+            >
+              Analysis Mode
+            </button>
+          </div>
+          
+          <button className="relative p-2 rounded-full hover:bg-gray-700">
+            <Bell className="h-5 w-5" />
+            <span className="absolute top-0 right-0 h-3 w-3 rounded-full bg-red-500"></span>
+          </button>
+          
+          <button className="p-2 rounded-full hover:bg-gray-700">
+            <Settings className="h-5 w-5" />
+          </button>
+        </div>
+      </header>
+      
+      {/* Main Content */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Camera Grid */}
+        <div className="flex-1 p-4 overflow-auto">
+          {activeCamera ? (
+            <div className="relative h-full bg-black rounded-lg overflow-hidden">
+              <img 
+                src={activeCamera.thumbnail} 
+                alt={activeCamera.name}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/70 to-transparent p-4 flex justify-between items-center">
+                <h3 className="font-semibold text-lg">{activeCamera.name}</h3>
+                <div className="flex space-x-2">
+                  <button className="p-1 rounded-full bg-gray-800/80 hover:bg-gray-700">
+                    <Play className="h-5 w-5" />
+                  </button>
+                  <button className="p-1 rounded-full bg-gray-800/80 hover:bg-gray-700" onClick={() => setActiveCamera(null)}>
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+              
+              {/* Status overlay */}
+              <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/70 to-transparent">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center space-x-2">
+                    <div className={`h-2 w-2 rounded-full ${activeCamera.isLive ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                    <span className="text-sm">{activeCamera.isLive ? 'Live' : 'Offline'}</span>
+                  </div>
+                  <div className="text-sm">12:30:45</div>
+                </div>
+              </div>
+              
+              {/* Alert overlay */}
+              {activeCamera.alertLevel === 'alert' && (
+                <div className="absolute inset-0 border-4 border-red-500 animate-pulse rounded-lg"></div>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 h-full">
+              {cameras.map(camera => (
+                <div 
+                  key={camera.id} 
+                  className={`relative bg-gray-800 rounded-lg overflow-hidden cursor-pointer transition-all duration-300 ${camera.alertLevel === 'alert' ? 'ring-2 ring-red-500' : ''}`}
+                  onClick={() => handleCameraClick(camera)}
+                >
+                  <img 
+                    src={camera.thumbnail} 
+                    alt={camera.name}
+                    className={`w-full h-48 object-cover ${camera.status === 'inactive' ? 'opacity-50' : ''}`}
+                  />
+                  
+                  <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/70 to-transparent p-2 flex justify-between items-center">
+                    <h3 className="font-semibold text-sm">{camera.name}</h3>
+                    <div className="flex space-x-1">
+                      <button 
+                        className="p-1 rounded-full bg-gray-800/80 hover:bg-gray-700"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleCamera(camera.id);
+                        }}
+                      >
+                        {camera.isLive ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+                      </button>
+                      <button 
+                        className="p-1 rounded-full bg-gray-800/80 hover:bg-gray-700"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeCamera(camera.id);
+                        }}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* Status overlay */}
+                  <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/70 to-transparent">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center space-x-2">
+                        <div className={`h-2 w-2 rounded-full ${camera.isLive ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                        <span className="text-xs">{camera.isLive ? 'Live' : 'Offline'}</span>
+                      </div>
+                      <div className="text-xs">12:30:45</div>
+                    </div>
+                  </div>
+                  
+                  {/* Alert indicator */}
+                  {camera.alertLevel === 'alert' && (
+                    <div className="absolute top-2 right-2 h-3 w-3 rounded-full bg-red-500 animate-pulse"></div>
+                  )}
+                  {camera.alertLevel === 'warning' && (
+                    <div className="absolute top-2 right-2 h-3 w-3 rounded-full bg-yellow-500"></div>
+                  )}
+                </div>
+              ))}
+              
+              {/* Add new camera button */}
+              <div 
+                className="bg-gray-800 rounded-lg border-2 border-dashed border-gray-600 flex items-center justify-center h-48 cursor-pointer hover:bg-gray-700 transition-colors"
+                onClick={() => setShowAddCamera(true)}
+              >
+                <div className="text-center">
+                  <PlusCircle className="w-10 h-10 mx-auto mb-2 text-gray-500" />
+                  <span className="text-gray-400">Add Camera</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        
+        {/* Sidebar */}
+        <div className="w-80 bg-gray-800 border-l border-gray-700 flex flex-col overflow-hidden">
+          {/* Tabs */}
+          <div className="flex border-b border-gray-700">
+            <button className="flex-1 py-3 px-4 text-center bg-blue-600 font-medium">Alerts</button>
+            <button className="flex-1 py-3 px-4 text-center text-gray-400 hover:bg-gray-700">Timeline</button>
+          </div>
+          
+          {/* Alerts List */}
+          <div className="flex-1 overflow-auto">
+            {alerts.length === 0 ? (
+              <div className="text-center p-6 text-gray-500">
+                <Bell className="h-10 w-10 mx-auto mb-2 opacity-50" />
+                <p>No alerts to display</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-700">
+                {alerts.map(alert => (
+                  <div 
+                    key={alert.id} 
+                    className={`p-3 flex items-start hover:bg-gray-700 ${alert.acknowledged ? 'opacity-60' : ''}`}
+                  >
+                    <div className={`p-2 rounded-full mt-1 mr-3 flex-shrink-0 ${
+                      alert.level === 'high' ? 'bg-red-500' : 
+                      alert.level === 'medium' ? 'bg-yellow-500' : 'bg-blue-500'
+                    }`}>
+                      <AlertTriangle className="h-4 w-4" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex justify-between">
+                        <h4 className="font-medium">
+                          {cameras.find(c => c.id === alert.cameraId)?.name || 'Unknown Camera'}
+                        </h4>
+                        <span className="text-xs text-gray-400">{alert.timestamp}</span>
+                      </div>
+                      <p className="text-sm text-gray-300 mt-1">{alert.message}</p>
+                      {!alert.acknowledged && (
+                        <button 
+                          className="mt-2 text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded"
+                          onClick={() => acknowledgeAlert(alert.id)}
+                        >
+                          Acknowledge
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          
+          {/* Status Footer */}
+          <div className="p-3 border-t border-gray-700 bg-gray-800">
+            <div className="flex justify-between text-sm">
+              <div className="flex items-center space-x-2">
+                <div className="h-2 w-2 rounded-full bg-green-500"></div>
+                <span>System Active</span>
+              </div>
+              <span className="text-gray-400">4 Cameras Online</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Add Camera Modal */}
+      {showAddCamera && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg w-full max-w-md p-6">
+            <h2 className="text-xl font-semibold mb-4">Add New Camera</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Camera Name</label>
+                <input 
+                  type="text" 
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Enter camera name"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-1">Video Source</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex-1">
+                    <button 
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md hover:bg-gray-600 flex items-center justify-center"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      Upload File
+                    </button>
+                    <input 
+                      type="file" 
+                      className="hidden" 
+                      ref={fileInputRef} 
+                      onChange={handleFileUpload}
+                      accept="video/*"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <button className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md hover:bg-gray-600 flex items-center justify-center">
+                      <link className="h-4 w-4 mr-2" />
+                      Stream URL
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              {uploadProgress > 0 && (
+                <div className="mt-4">
+                  <div className="flex justify-between text-sm mb-1">
+                    <span>Uploading...</span>
+                    <span>{uploadProgress}%</span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2">
+                    <div 
+                      className="bg-blue-500 h-2 rounded-full" 
+                      style={{ width: `${uploadProgress}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
+              
+              <div className="flex justify-end space-x-3 mt-4">
+                <button 
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-md"
+                  onClick={() => setShowAddCamera(false)}
+                >
+                  Cancel
+                </button>
+                <button 
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-md"
+                  onClick={simulateUpload}
+                >
+                  Add Camera
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
