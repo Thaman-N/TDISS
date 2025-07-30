@@ -41,7 +41,7 @@ def load_violence_detection_model(model_path, device=None):
         print(f"Loading model from {model_path}...")
         
         # Load the saved object
-        saved_object = torch.load(model_path, map_location=device)
+        saved_object = torch.load(model_path, map_location=device, weights_only=False)
         
         # Determine if it's a complete model or a state dict
         if isinstance(saved_object, dict) and 'model_state_dict' in saved_object:
