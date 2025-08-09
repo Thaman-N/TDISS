@@ -1,3 +1,6 @@
+## Preview
+[![Watch the demo](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-video.gif)](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-video.mp4)
+
 # Aggression Detection Dashboard
 
 A web-based dashboard for analyzing videos and detecting aggression using deep learning models. Built with FastAPI and PyTorch, featuring a modern UI with real-time processing and detailed results visualization.
