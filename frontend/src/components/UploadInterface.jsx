@@ -282,6 +282,7 @@ const UploadInterface = () => {
           height: 0;
           background: linear-gradient(135deg, hsl(var(--primary) / 0.03), transparent);
           transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          pointer-events: none;
         }
         .path-input-card:hover::before {
           height: 100%;
