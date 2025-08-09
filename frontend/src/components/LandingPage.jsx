@@ -364,14 +364,22 @@ const LandingPage = () => {
             <p className="text-xl text-muted-foreground mb-12 max-w-2xl mx-auto">
               Join the future of video content moderation with AI-powered aggression detection
             </p>
-            <Link to="/upload">
+            <div className="flex flex-col gap-4 items-center mb-8">
+  <Link to="/upload">
+    <Button size="lg" className="px-8 py-4 text-lg demo-button">
+      Try It Now <ArrowRight className="ml-2 h-5 w-5" />
+    </Button>
+  </Link>
+</div>
+<Link to="/upload"></Link>
+            {/* <Link to="/upload">
               <MetallicPaint
                 colors={['hsl(var(--primary))', 'hsl(var(--primary)/0.8)']}
                 className="px-12 py-6 text-xl"
               >
                 Start Free Trial <ArrowRight className="ml-2 h-6 w-6" />
               </MetallicPaint>
-            </Link>
+            </Link> */}
           </AnimatedSection>
         </div>
       </section>
