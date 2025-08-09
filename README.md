@@ -159,6 +159,7 @@ frontend
 
 ## Requirements
 
+- NodeJS
 - Python 3.11+
 - PyTorch
 - OpenCV
