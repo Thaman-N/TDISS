@@ -221,7 +221,7 @@ const Navigation = ({ darkMode, toggleDarkMode, currentTheme, setTheme, availabl
           <Link to="/" className="flex items-center space-x-2 nav-logo">
             <Shield className="h-8 w-8 text-primary logo-icon" />
             <span className="text-xl font-bold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent logo-text">
-              ADISS
+              TDISS
             </span>
             <Badge variant="outline" className="text-xs beta-badge">
               Beta
