@@ -56,6 +56,7 @@ Navigate to http://localhost:5173
 
 ## Using the Training Pipeline
 ```bash
+cd backend/trainingpipeline
 # Depending on hardware and location of dataset, command and paths in files may need to be tweaked a bit
 # may have to run export KMP_DUPLICATE_LIB_OK="TRUE" or $env:KMP_DUPLICATE_LIB_OK = "TRUE" on powershell
 python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 12 --num_epochs 50 --model_name x3d_s --mixed_precision
