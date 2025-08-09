@@ -1,0 +1,68 @@
+[
+  {
+    "job_id": "7f08fd9e-9ebf-4da9-9972-25dbbf835cef",
+    "filename": "7f08fd9e-9ebf-4da9-9972-25dbbf835cef_1AURh0Wj_0.avi",
+    "timestamp": "2025-08-08 21:40:04",
+    "has_violence": true,
+    "violence_duration": 5.0,
+    "violence_percentage": 100.0,
+    "overall_confidence": 1.0,
+    "model_type": "X3D-S",
+    "thumbnail": "/api/results/7f08fd9e-9ebf-4da9-9972-25dbbf835cef_thumbnail.jpg"
+  },
+  {
+    "job_id": "c82dbbb9-d099-4dbe-b8d6-fd4e0e8cf105",
+    "filename": "c82dbbb9-d099-4dbe-b8d6-fd4e0e8cf105_2RYnSFPD_U_0.avi",
+    "timestamp": "2025-08-08 21:40:47",
+    "has_violence": true,
+    "violence_duration": 5.0,
+    "violence_percentage": 100.0,
+    "overall_confidence": 1.0,
+    "model_type": "X3D-S",
+    "thumbnail": "/api/results/c82dbbb9-d099-4dbe-b8d6-fd4e0e8cf105_thumbnail.jpg"
+  },
+  {
+    "job_id": "2fd2cff4-d29a-4c6f-b0f6-9d98e4a5c436",
+    "filename": "2fd2cff4-d29a-4c6f-b0f6-9d98e4a5c436_1AURh0Wj_0.avi",
+    "timestamp": "2025-08-08 21:45:41",
+    "has_violence": true,
+    "violence_duration": 5.0,
+    "violence_percentage": 100.0,
+    "overall_confidence": 1.0,
+    "model_type": "X3D-S",
+    "thumbnail": "/api/results/2fd2cff4-d29a-4c6f-b0f6-9d98e4a5c436_thumbnail.jpg"
+  },
+  {
+    "job_id": "c85acc31-a55c-4152-a19d-50733cabe103",
+    "filename": "c85acc31-a55c-4152-a19d-50733cabe103_1AURh0Wj_0.avi",
+    "timestamp": "2025-08-08 21:48:33",
+    "has_violence": false,
+    "violence_duration": 0,
+    "violence_percentage": 0,
+    "overall_confidence": 0.0,
+    "model_type": "X3D-S",
+    "thumbnail": "/api/results/c85acc31-a55c-4152-a19d-50733cabe103_thumbnail.jpg"
+  },
+  {
+    "job_id": "c3d55961-1421-49bc-84cc-f40dbf5c299e",
+    "filename": "c3d55961-1421-49bc-84cc-f40dbf5c299e_1AURh0Wj_0.avi",
+    "timestamp": "2025-08-08 21:49:31",
+    "has_violence": false,
+    "violence_duration": 0,
+    "violence_percentage": 0,
+    "overall_confidence": 0.004547281190752983,
+    "model_type": "X3D-S",
+    "thumbnail": "/api/results/c3d55961-1421-49bc-84cc-f40dbf5c299e_thumbnail.jpg"
+  },
+  {
+    "job_id": "92451740-8b34-4fe3-9fbd-9f7f2d56105a",
+    "filename": "92451740-8b34-4fe3-9fbd-9f7f2d56105a_1AURh0Wj_0.avi",
+    "timestamp": "2025-08-08 22:27:19",
+    "has_violence": true,
+    "violence_duration": 5.0,
+    "violence_percentage": 100.0,
+    "overall_confidence": 0.6614716053009033,
+    "model_type": "X3D-S",
+    "thumbnail": "/api/results/92451740-8b34-4fe3-9fbd-9f7f2d56105a_thumbnail.jpg"
+  }
+]

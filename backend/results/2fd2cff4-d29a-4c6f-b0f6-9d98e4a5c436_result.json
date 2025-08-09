@@ -1,0 +1,38 @@
+{
+  "job_id": "2fd2cff4-d29a-4c6f-b0f6-9d98e4a5c436",
+  "video_path": "uploads\\2fd2cff4-d29a-4c6f-b0f6-9d98e4a5c436_1AURh0Wj_0.avi",
+  "filename": "2fd2cff4-d29a-4c6f-b0f6-9d98e4a5c436_1AURh0Wj_0.avi",
+  "timestamp": "2025-08-08 21:45:41",
+  "metadata": {
+    "width": 320,
+    "height": 240,
+    "fps": 30.0,
+    "frame_count": 150,
+    "duration": 5.0,
+    "duration_formatted": "0:05"
+  },
+  "thumbnail": "/api/results/2fd2cff4-d29a-4c6f-b0f6-9d98e4a5c436_thumbnail.jpg",
+  "model_info": {
+    "architecture": "X3D-S",
+    "motion_enhancement": true,
+    "input_frames": 16,
+    "input_resolution": "224x224"
+  },
+  "overall_result": {
+    "is_fight": true,
+    "confidence": 1.0,
+    "inference_time": 0.012505769729614258
+  },
+  "segments": [
+    {
+      "start": 0,
+      "end": 5.0,
+      "confidence": 1.0,
+      "start_formatted": "0:00",
+      "end_formatted": "0:05"
+    }
+  ],
+  "has_violence": true,
+  "violence_duration": 5.0,
+  "violence_percentage": 100.0
+}
