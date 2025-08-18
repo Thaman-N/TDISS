@@ -73,20 +73,15 @@ backend
 ├── model.py
 ├── torch_detection.py
 ├── stable_best_model.pth
-├── trainingpipeline
-│   ├── constraints.txt
-│   ├── train_x3d_violence.py
-│   ├── x3d_dataset.py
-│   ├── x3d_model.py
-│   ├── x3d_trainer.py
-│   ├── checkpoints
-│   │   ├── best_model.pth
-│   │   ├── training_curves.png
-│   │   └── training_history.json
+└── trainingpipeline
+    ├── constraints.txt
+    ├── train_x3d_violence.py
+    ├── x3d_dataset.py
+    ├── x3d_model.py
+    └──x3d_trainer.py
 
 frontend
 ├── public
-│   ├── 0Ow4cotKOuw_2.avi
 │   ├── demo-video.mp4
 │   └── vite.svg
 ├── src
@@ -151,7 +146,7 @@ frontend
 ## Requirements
 
 - NodeJS
-- Python 3.11+
+- Python 3.11+ (tested only using conda)
 - PyTorch
 - OpenCV
 - FastAPI
