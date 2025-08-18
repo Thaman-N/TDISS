@@ -5,7 +5,7 @@ import time
 import torch
 from pathlib import Path
 
-# Import the X3D model definition
+# Import the FIXED X3D model definition
 from model import X3DViolenceDetector, create_model
 
 # Constants for X3D model
@@ -15,7 +15,7 @@ SAMPLING_RATE = 4     # Temporal sampling rate
 
 def load_violence_detection_model(model_path, device=None):
     """
-    Load the PyTorch X3D violence detection model.
+    Load the FIXED PyTorch X3D violence detection model.
     
     Args:
         model_path: Path to the .pth model file
@@ -38,59 +38,71 @@ def load_violence_detection_model(model_path, device=None):
     print(f"Using device: {device}")
     
     try:
-        print(f"Loading X3D model from {model_path}...")
+        print(f"Loading STABLE X3D model from {model_path}...")
         
         # Load the saved object
         saved_object = torch.load(model_path, map_location=device, weights_only=False)
         
-        # Determine if it's a complete model or a state dict
-        if isinstance(saved_object, dict) and 'model_state_dict' in saved_object:
-            # Create a new model instance - use same parameters as training
-            model = X3DViolenceDetector(
-                x3d_model_name="x3d_s",  # This should match what you trained with
-                num_classes=2,
-                use_motion_enhancement=True,  # This should match training
-                motion_weight=0.3
-            )
-            
-            # Load state dict - use strict=False to ignore classifier weights that will be recreated
-            state_dict = saved_object['model_state_dict']
-            
-            # Filter out classifier weights since they'll be recreated dynamically
-            filtered_state_dict = {k: v for k, v in state_dict.items() 
-                                 if not k.startswith('classifier.')}
-            
-            model.load_state_dict(filtered_state_dict, strict=False)
-            print("Loaded X3D model from state dictionary (classifier will be recreated)")
-            
-        elif isinstance(saved_object, dict) and any(k.startswith('x3d_backbone.') for k in saved_object.keys()):
-            # It's a raw state dict
-            model = X3DViolenceDetector(
-                x3d_model_name="x3d_s",
-                num_classes=2,
-                use_motion_enhancement=True,
-                motion_weight=0.3
-            )
-            
-            # Filter out classifier weights
-            filtered_state_dict = {k: v for k, v in saved_object.items() 
-                                 if not k.startswith('classifier.')}
-            
-            model.load_state_dict(filtered_state_dict, strict=False)
-            print("Loaded X3D model from raw state dictionary (classifier will be recreated)")
-            
-        else:
-            # It's likely a full model
-            model = saved_object
-            print("Loaded complete X3D model object")
+        # Create STABLE model instance
+        model = X3DViolenceDetector(
+            x3d_model_name="x3d_s",
+            num_classes=2,
+            use_motion_enhancement=True,
+            dropout_rate=0.2,  # Match training settings
+            motion_weight=0.3
+        )
         
-        # Move model to the appropriate device and set to eval mode
+        # Load state dict
+        if isinstance(saved_object, dict) and 'model_state_dict' in saved_object:
+            state_dict = saved_object['model_state_dict']
+            print("Loading from checkpoint with model_state_dict")
+        elif isinstance(saved_object, dict):
+            state_dict = saved_object
+            print("Loading from raw state dict")
+        else:
+            # It's a complete model object
+            model = saved_object
+            print("Loading complete model object")
+            model = model.to(device)
+            model.eval()
+            
+            # Test model
+            print("Running model warm-up prediction...")
+            dummy_rgb = torch.zeros((1, 3, NUM_FRAMES, INPUT_SIZE, INPUT_SIZE), dtype=torch.float32, device=device)
+            dummy_data = {'rgb': dummy_rgb}
+            
+            if hasattr(model, 'use_motion_enhancement') and model.use_motion_enhancement:
+                dummy_flow = torch.zeros((1, 3, NUM_FRAMES, INPUT_SIZE, INPUT_SIZE), dtype=torch.float32, device=device)
+                dummy_data['flow'] = dummy_flow
+            
+            with torch.no_grad():
+                output = model(dummy_data)
+                print(f"Warm-up output range: [{output.min().item():.3f}, {output.max().item():.3f}]")
+                
+                if abs(output.max().item()) > 20:
+                    print("⚠️  WARNING: Model still producing extreme logits!")
+                else:
+                    print("✅ Model producing reasonable logits")
+            
+            return model, use_gpu
+        
+        # Load state dict into model
+        try:
+            model.load_state_dict(state_dict, strict=True)
+            print("✅ Loaded model with strict=True")
+        except Exception as e:
+            print(f"Strict loading failed: {e}")
+            print("Trying with strict=False...")
+            model.load_state_dict(state_dict, strict=False)
+            print("⚠️  Loaded model with strict=False")
+        
+        # Move model to device and set to eval mode
         model = model.to(device)
         model.eval()
         
-        print("X3D model loaded successfully and ready for inference.")
+        print("STABLE X3D model loaded successfully and ready for inference.")
         
-        # Run a small test to make sure everything's working
+        # Run a test to check for extreme logits
         print("Running model warm-up prediction...")
         dummy_rgb = torch.zeros((1, 3, NUM_FRAMES, INPUT_SIZE, INPUT_SIZE), dtype=torch.float32, device=device)
         dummy_data = {'rgb': dummy_rgb}
@@ -101,12 +113,20 @@ def load_violence_detection_model(model_path, device=None):
             dummy_data['flow'] = dummy_flow
         
         with torch.no_grad():
-            _ = model(dummy_data)
+            output = model(dummy_data)
+            print(f"Warm-up output range: [{output.min().item():.3f}, {output.max().item():.3f}]")
+            
+            # Check for extreme logits
+            if abs(output.max().item()) > 20:
+                print("⚠️  WARNING: Model still producing extreme logits!")
+                print("This suggests the model needs to be retrained with the stable pipeline.")
+            else:
+                print("✅ Model producing reasonable logits")
         
         return model, use_gpu
         
     except Exception as e:
-        print(f"Error loading X3D model: {e}")
+        print(f"Error loading STABLE X3D model: {e}")
         import traceback
         traceback.print_exc()
         raise
@@ -272,7 +292,7 @@ def preprocess_frames(frames, compute_flow=True):
 
 def predict_violence(model, data, threshold=0.5, debug=False, device=None):
     """
-    Make a violence prediction on the given data.
+    Make a violence prediction on the given data with STABILITY CHECKS.
     
     Args:
         model: PyTorch X3D model
@@ -315,10 +335,17 @@ def predict_violence(model, data, threshold=0.5, debug=False, device=None):
     # Convert output to numpy for processing
     outputs_np = outputs.cpu().numpy()
     
+    # STABILITY CHECK: Check for extreme logits
+    logit_range = outputs_np.max() - outputs_np.min()
+    if logit_range > 50:
+        print(f"⚠️  WARNING: Extreme logit range detected: {logit_range:.2f}")
+        print("This suggests the model was not trained with the stable pipeline.")
+    
     # Print raw predictions if in debug mode
     if debug:
         print(f"Raw logits: {outputs_np}")
         print(f"Output shape: {outputs_np.shape}")
+        print(f"Logit range: {logit_range:.2f}")
         print(f"Inference time: {inference_time:.2f} seconds")
     
     # Process predictions
@@ -350,6 +377,12 @@ def predict_violence(model, data, threshold=0.5, debug=False, device=None):
             print(f"INTERPRETATION: NonFight: {non_fight_prob:.4f}, Fight: {fight_prob:.4f}")
             print(f"Current prediction: {'FIGHT' if fight_prob > threshold else 'NON-FIGHT'}")
         
+        # STABILITY CHECK: Warn about overconfident predictions
+        if fight_prob > 0.99 or fight_prob < 0.01:
+            if debug:
+                print(f"⚠️  WARNING: Overconfident prediction ({fight_prob:.4f})")
+                print("This suggests training instability or extreme model weights.")
+        
         # Check if fight probability exceeds threshold
         is_fight = fight_prob > threshold
         
@@ -369,10 +402,10 @@ def predict_violence(model, data, threshold=0.5, debug=False, device=None):
         
         return is_fight, fight_prob, inference_time
     
-# Function to test the model on a single video
+# Function to test the STABLE model on a single video
 def test_detection(model_path, video_path, threshold=0.5):
-    """Test the violence detection on a single video"""
-    # Load model
+    """Test the STABLE violence detection on a single video"""
+    # Load STABLE model
     model, _ = load_violence_detection_model(model_path)
     
     # Extract and preprocess frames
@@ -391,16 +424,26 @@ def test_detection(model_path, video_path, threshold=0.5):
     result = "VIOLENCE DETECTED" if is_fight else "NO VIOLENCE DETECTED"
     print(f"Result: {result} (Confidence: {confidence:.4f}, Inference time: {inference_time:.2f}s)")
     
+    # Additional stability checks
+    if confidence > 0.99:
+        print("⚠️  WARNING: Overconfident prediction - model may need retraining")
+    elif confidence < 0.01:
+        print("⚠️  WARNING: Underconfident prediction - model may need retraining")
+    else:
+        print("✅ Confidence level appears reasonable")
+    
     return is_fight, confidence, inference_time
 
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Test X3D violence detection on a video')
-    parser.add_argument('--model', type=str, default='checkpoints/best_model.pth', help='Path to model file')
+    parser = argparse.ArgumentParser(description='Test STABLE X3D violence detection on a video')
+    parser.add_argument('--model', type=str, default='stable_checkpoints/stable_best_model.pth', help='Path to STABLE model file')
     parser.add_argument('--video', type=str, required=True, help='Path to video file')
     parser.add_argument('--threshold', type=float, default=0.6, help='Detection threshold')
     
     args = parser.parse_args()
     
+    print("Testing STABLE X3D Violence Detection")
+    print("=====================================")
     test_detection(args.model, args.video, args.threshold)

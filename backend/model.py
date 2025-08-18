@@ -11,42 +11,51 @@ class MotionEnhancementModule(nn.Module):
     Lightweight design for real-time inference.
     """
     
-    def __init__(self, input_dim: int, hidden_dim: int = 512, output_dim: int = 256):
+    def __init__(self, input_dim: int, hidden_dim: int = 256, output_dim: int = 128):
         super().__init__()
         
-        # Lightweight 3D CNN for optical flow processing
+        # Reduced complexity to prevent overfitting
         self.flow_conv = nn.Sequential(
-            nn.Conv3d(3, 64, kernel_size=(3, 3, 3), padding=1, stride=1),
-            nn.BatchNorm3d(64),
+            nn.Conv3d(3, 32, kernel_size=(3, 3, 3), padding=1, stride=1),
+            nn.BatchNorm3d(32),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(kernel_size=(1, 2, 2), stride=(1, 2, 2)),
+            
+            nn.Conv3d(32, 64, kernel_size=(3, 3, 3), padding=1, stride=1),
+            nn.BatchNorm3d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2)),
             
             nn.Conv3d(64, 128, kernel_size=(3, 3, 3), padding=1, stride=1),
             nn.BatchNorm3d(128),
             nn.ReLU(inplace=True),
-            nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2)),
-            
-            nn.Conv3d(128, 256, kernel_size=(3, 3, 3), padding=1, stride=1),
-            nn.BatchNorm3d(256),
-            nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool3d((1, 1, 1))
         )
         
-        # Motion feature fusion
+        # Simplified motion feature processing
         self.motion_fc = nn.Sequential(
-            nn.Linear(256, hidden_dim),
+            nn.Linear(128, hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            nn.Dropout(0.2),  # Reduced dropout
             nn.Linear(hidden_dim, output_dim)
         )
         
-        # Attention mechanism for motion importance
-        self.motion_attention = nn.Sequential(
-            nn.Linear(output_dim, output_dim // 4),
-            nn.ReLU(inplace=True),
-            nn.Linear(output_dim // 4, output_dim),
-            nn.Sigmoid()
-        )
+        # Initialize weights properly
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Proper weight initialization"""
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm3d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.constant_(m.bias, 0)
     
     def forward(self, optical_flow: torch.Tensor) -> torch.Tensor:
         """
@@ -59,30 +68,25 @@ class MotionEnhancementModule(nn.Module):
         optical_flow = optical_flow.float()
         
         # Process optical flow through 3D CNN
-        flow_features = self.flow_conv(optical_flow)  # [B, 256, 1, 1, 1]
-        flow_features = flow_features.view(flow_features.size(0), -1)  # [B, 256]
+        flow_features = self.flow_conv(optical_flow)  # [B, 128, 1, 1, 1]
+        flow_features = flow_features.view(flow_features.size(0), -1)  # [B, 128]
         
         # Generate motion features
         motion_features = self.motion_fc(flow_features)  # [B, output_dim]
         
-        # Apply attention to emphasize important motion patterns
-        attention_weights = self.motion_attention(motion_features)
-        enhanced_motion = motion_features * attention_weights
-        
-        return enhanced_motion
+        return motion_features
 
 
 class X3DViolenceDetector(nn.Module):
     """
-    X3D-based violence detection model with motion enhancement.
-    Optimized for real-time inference and high accuracy.
+    FIXED X3D-based violence detection model with proper training stability.
     """
     
     def __init__(
         self,
         x3d_model_name: str = "x3d_s",
         num_classes: int = 2,
-        dropout_rate: float = 0.3,
+        dropout_rate: float = 0.2,
         use_motion_enhancement: bool = True,
         motion_weight: float = 0.3
     ):
@@ -90,48 +94,30 @@ class X3DViolenceDetector(nn.Module):
         
         self.use_motion_enhancement = use_motion_enhancement
         self.motion_weight = motion_weight
+        self.num_classes = num_classes
         
         # Load pre-trained X3D model
         print(f"Loading {x3d_model_name} model...")
         self.x3d_backbone = self._load_x3d_model(x3d_model_name)
         
+        # Get feature dimension by running a forward pass
+        self.feature_dim = self._get_feature_dim()
+        
         # Motion enhancement module
         if self.use_motion_enhancement:
             self.motion_module = MotionEnhancementModule(
-                input_dim=3,  # RGB optical flow
-                output_dim=256
+                input_dim=3,
+                output_dim=128  # Reduced from 256
             )
+            total_features = self.feature_dim + 128
+        else:
+            total_features = self.feature_dim
         
-        # We'll initialize the classifier after we know the feature dimensions
-        self.classifier = None
-        self.feature_dim_determined = False
-        self.dropout_rate = dropout_rate
-        self.num_classes = num_classes
+        # FIXED: Create classifier immediately with proper initialization
+        self.classifier = self._create_classifier(total_features, dropout_rate)
         
-        print("Model structure initialized. Classifier will be created after first forward pass.")
-    
-    def _create_classifier(self, feature_dim: int):
-        """Create classifier once we know the feature dimension"""
-        self.classifier = nn.Sequential(
-            nn.Dropout(self.dropout_rate),
-            nn.Linear(feature_dim, 512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(self.dropout_rate),
-            nn.Linear(512, 256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(self.dropout_rate),
-            nn.Linear(256, self.num_classes)
-        )
-        
-        # Initialize classifier weights
-        self._init_classifier_weights()
-        
-        # Move to same device as the backbone
-        device = next(self.x3d_backbone.parameters()).device
-        self.classifier = self.classifier.to(device)
-        
-        self.feature_dim_determined = True
-        print(f"Classifier created with input dimension: {feature_dim}")
+        print(f"Model initialized with {total_features} input features")
+        print(f"X3D features: {self.feature_dim}, Motion features: {128 if use_motion_enhancement else 0}")
     
     def _load_x3d_model(self, model_name: str):
         """Load pre-trained X3D model from torch hub"""
@@ -141,7 +127,6 @@ class X3DViolenceDetector(nn.Module):
                 model_name, 
                 pretrained=True
             )
-            # Don't remove blocks - we'll extract features properly in forward()
             return model
         except Exception as e:
             print(f"Error loading {model_name}: {e}")
@@ -153,136 +138,103 @@ class X3DViolenceDetector(nn.Module):
             )
             return model
     
-    def _init_classifier_weights(self):
-        """Initialize classifier weights"""
-        for m in self.classifier.modules():
+    def _get_feature_dim(self):
+        """Determine feature dimension by running a test forward pass"""
+        device = next(self.x3d_backbone.parameters()).device
+        dummy_input = torch.zeros((1, 3, 16, 224, 224), device=device)
+        
+        with torch.no_grad():
+            features = self._extract_x3d_features(dummy_input)
+            
+        return features.shape[1]
+    
+    def _extract_x3d_features(self, rgb_frames: torch.Tensor) -> torch.Tensor:
+        """Extract features from X3D backbone"""
+        x = rgb_frames
+        
+        # Forward through X3D backbone (excluding final classification head)
+        if hasattr(self.x3d_backbone, 'blocks'):
+            for i, block in enumerate(self.x3d_backbone.blocks):
+                # Skip the final classification head block
+                if hasattr(block, 'proj') and i == len(self.x3d_backbone.blocks) - 1:
+                    continue
+                x = block(x)
+        else:
+            # Fallback: extract features before final layer
+            features = self.x3d_backbone.features(rgb_frames)
+            x = features
+        
+        # Global average pooling
+        if len(x.shape) == 5:  # [B, C, T, H, W]
+            x = F.adaptive_avg_pool3d(x, (1, 1, 1))  # [B, C, 1, 1, 1]
+            x = x.view(x.size(0), -1)  # [B, C]
+        elif len(x.shape) == 2:  # [B, features]
+            pass  # Already flattened
+        else:
+            x = x.view(x.size(0), -1)  # Flatten
+        
+        return x
+    
+    def _create_classifier(self, input_dim: int, dropout_rate: float):
+        """Create classifier with proper initialization"""
+        classifier = nn.Sequential(
+            nn.Dropout(dropout_rate),
+            nn.Linear(input_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout_rate),
+            nn.Linear(256, 64),  # Smaller hidden layer
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout_rate),
+            nn.Linear(64, self.num_classes)
+        )
+        
+        # CRITICAL: Proper weight initialization to prevent gradient explosion
+        for m in classifier.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                # Use Xavier initialization for better gradient flow
+                nn.init.xavier_normal_(m.weight, gain=1.0)
                 nn.init.constant_(m.bias, 0)
+        
+        return classifier
     
     def forward(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        Forward pass
-        
-        Args:
-            data: Dictionary containing 'rgb' and optionally 'flow' tensors
-                 'rgb': [B, C, T, H, W] RGB video tensor
-                 'flow': [B, C, T, H, W] optical flow tensor
-        
-        Returns:
-            logits: [B, num_classes] classification logits
+        Forward pass with fixed architecture
         """
         rgb_frames = data['rgb']  # [B, C, T, H, W]
-        batch_size = rgb_frames.size(0)
-        
-        # Ensure input is float32 (compatible with mixed precision)
-        rgb_frames = rgb_frames.float()
-        
-        # Extract spatial-temporal features using X3D
-        with torch.cuda.amp.autocast():
-            # Forward through X3D backbone (excluding final classification head)
-            x = rgb_frames
-            
-            # Go through X3D blocks except the final head
-            if hasattr(self.x3d_backbone, 'blocks'):
-                for i, block in enumerate(self.x3d_backbone.blocks):
-                    # Skip the final classification head block
-                    if hasattr(block, 'proj') and i == len(self.x3d_backbone.blocks) - 1:
-                        # This is the final projection layer, skip it
-                        continue
-                    x = block(x)
-            else:
-                # Fallback: use the full model but extract features before final layer
-                x = self.x3d_backbone(rgb_frames)
-            
-            # Global average pooling to get feature vector
-            if len(x.shape) == 5:  # [B, C, T, H, W]
-                x3d_features = F.adaptive_avg_pool3d(x, (1, 1, 1))  # [B, C, 1, 1, 1]
-                x3d_features = x3d_features.view(batch_size, -1)  # [B, C]
-            elif len(x.shape) == 2:  # [B, features] - already flattened
-                x3d_features = x
-            else:
-                # Handle other shapes
-                x3d_features = x.view(batch_size, -1)
-        
-        # Motion enhancement
-        if self.use_motion_enhancement and 'flow' in data:
-            optical_flow = data['flow']  # [B, C, T, H, W]
-            optical_flow = optical_flow.float()  # Ensure float32
-            motion_features = self.motion_module(optical_flow)  # [B, 256]
-            
-            # Combine X3D and motion features
-            combined_features = torch.cat([x3d_features, motion_features], dim=1)
-        else:
-            combined_features = x3d_features
-        
-        # Create classifier on first forward pass
-        if not self.feature_dim_determined:
-            feature_dim = combined_features.shape[1]
-            self._create_classifier(feature_dim)
-        
-        # Classification
-        logits = self.classifier(combined_features)  # [B, num_classes]
-        
-        return logits
-    
-    def get_feature_maps(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """
-        Extract intermediate feature maps for analysis
-        """
-        rgb_frames = data['rgb']
-        batch_size = rgb_frames.size(0)
-        
-        features = {}
         
         # Ensure input is float32
         rgb_frames = rgb_frames.float()
         
-        # X3D features
-        with torch.cuda.amp.autocast():
-            # Forward through X3D backbone (excluding final classification head)
-            x = rgb_frames
-            
-            if hasattr(self.x3d_backbone, 'blocks'):
-                for i, block in enumerate(self.x3d_backbone.blocks):
-                    # Skip the final classification head block
-                    if hasattr(block, 'proj') and i == len(self.x3d_backbone.blocks) - 1:
-                        continue
-                    x = block(x)
-            else:
-                x = self.x3d_backbone(rgb_frames)
-            
-            # Global average pooling to get feature vector
-            if len(x.shape) == 5:  # [B, C, T, H, W]
-                x3d_features = F.adaptive_avg_pool3d(x, (1, 1, 1))
-                x3d_features = x3d_features.view(batch_size, -1)
-            elif len(x.shape) == 2:
-                x3d_features = x
-            else:
-                x3d_features = x.view(batch_size, -1)
-            
-            features['x3d_features'] = x3d_features
+        # Extract X3D features
+        x3d_features = self._extract_x3d_features(rgb_frames)
         
-        # Motion features
+        # Motion enhancement
         if self.use_motion_enhancement and 'flow' in data:
             optical_flow = data['flow'].float()
             motion_features = self.motion_module(optical_flow)
-            features['motion_features'] = motion_features
+            
+            # Combine features
+            combined_features = torch.cat([x3d_features, motion_features], dim=1)
+        else:
+            combined_features = x3d_features
         
-        return features
+        # Classification
+        logits = self.classifier(combined_features)
+        
+        return logits
 
 
-class FocalLoss(nn.Module):
+class StableCrossEntropyLoss(nn.Module):
     """
-    Focal Loss for handling class imbalance in violence detection.
-    Addresses the problem of easy negatives dominating the loss.
+    Stable cross-entropy loss with optional label smoothing.
+    Much more stable than Focal Loss for this application.
     """
     
-    def __init__(self, alpha: float = 0.25, gamma: float = 2.0, label_smoothing: float = 0.1):
+    def __init__(self, label_smoothing: float = 0.05, weight: Optional[torch.Tensor] = None):
         super().__init__()
-        self.alpha = alpha
-        self.gamma = gamma
         self.label_smoothing = label_smoothing
+        self.weight = weight
         
     def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -290,30 +242,12 @@ class FocalLoss(nn.Module):
             predictions: [B, num_classes] model predictions (logits)
             targets: [B] ground truth labels
         """
-        # Apply label smoothing
-        num_classes = predictions.size(1)
-        targets_one_hot = F.one_hot(targets, num_classes).float()
-        
-        if self.label_smoothing > 0:
-            targets_one_hot = targets_one_hot * (1 - self.label_smoothing) + \
-                             self.label_smoothing / num_classes
-        
-        # Compute cross entropy
-        ce_loss = F.cross_entropy(predictions, targets, reduction='none')
-        
-        # Compute probabilities
-        p_t = torch.exp(-ce_loss)
-        
-        # Compute focal weight
-        focal_weight = (1 - p_t) ** self.gamma
-        
-        # Apply alpha weighting
-        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-        
-        # Focal loss
-        focal_loss = alpha_t * focal_weight * ce_loss
-        
-        return focal_loss.mean()
+        return F.cross_entropy(
+            predictions, 
+            targets, 
+            label_smoothing=self.label_smoothing,
+            weight=self.weight
+        )
 
 
 def create_model(
@@ -323,35 +257,60 @@ def create_model(
     device: str = "cuda"
 ) -> X3DViolenceDetector:
     """
-    Create and initialize the X3D violence detection model
-    
-    Args:
-        model_name: X3D model variant ('x3d_xs', 'x3d_s', 'x3d_m', 'x3d_l')
-        num_classes: Number of output classes (2 for violence detection)
-        use_motion_enhancement: Whether to use motion enhancement
-        device: Device to load the model on
-    
-    Returns:
-        model: Initialized model
+    Create and initialize the FIXED X3D violence detection model
     """
     model = X3DViolenceDetector(
         x3d_model_name=model_name,
         num_classes=num_classes,
         use_motion_enhancement=use_motion_enhancement,
+        dropout_rate=0.2,  # Reduced dropout
         motion_weight=0.3
     )
     
     model = model.to(device)
     
-    # Count parameters (excluding classifier which isn't created yet)
-    backbone_params = sum(p.numel() for p in model.x3d_backbone.parameters())
-    motion_params = sum(p.numel() for p in model.motion_module.parameters()) if use_motion_enhancement else 0
+    # Count parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
     print(f"Model: {model_name}")
-    print(f"Backbone parameters: {backbone_params:,}")
-    if use_motion_enhancement:
-        print(f"Motion module parameters: {motion_params:,}")
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
     print(f"Motion enhancement: {use_motion_enhancement}")
-    print("Note: Classifier parameters will be counted after first forward pass")
     
     return model
+
+
+if __name__ == "__main__":
+    # Test the model
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Testing fixed model on device: {device}")
+    
+    # Create model
+    model = create_model(
+        model_name="x3d_s",
+        use_motion_enhancement=True,
+        device=device
+    )
+    
+    # Test forward pass
+    batch_size, channels, frames, height, width = 2, 3, 16, 224, 224
+    
+    dummy_data = {
+        'rgb': torch.randn(batch_size, channels, frames, height, width).to(device),
+        'flow': torch.randn(batch_size, channels, frames, height, width).to(device)
+    }
+    
+    print("\nTesting forward pass...")
+    with torch.no_grad():
+        output = model(dummy_data)
+        print(f"Output shape: {output.shape}")
+        print(f"Output range: [{output.min().item():.3f}, {output.max().item():.3f}]")
+        
+        # Check if logits are reasonable
+        if abs(output.max().item()) < 10:
+            print("✓ Logits are in reasonable range")
+        else:
+            print("✗ Logits are still extreme")
+    
+    print("\nFixed model test completed!")

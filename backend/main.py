@@ -35,9 +35,6 @@ import signal
 import sys
 import atexit
 
-# Import the exact functions from your detection pipeline
-from torch_detection import preprocess_frames, predict_violence
-
 def secure_filename(filename):
     """Make a filename safe for use in URLs and file systems."""
     # Remove any path components
@@ -54,7 +51,7 @@ def secure_filename(filename):
     return filename
 
 # Import your PyTorch detection module (copy these files to the same directory)
-from torch_detection_fixed import load_violence_detection_model, extract_frames, preprocess_frames, predict_violence
+from torch_detection import load_violence_detection_model, extract_frames, preprocess_frames, predict_violence
 
 # Event storage classes
 DB_PATH = "violence_events.db"
