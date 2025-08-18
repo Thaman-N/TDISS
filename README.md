@@ -60,9 +60,9 @@ Navigate to http://localhost:5173
 ## Using the Training Pipeline
 ```bash
 cd backend/trainingpipeline
-# Depending on hardware and location of dataset, command and paths in files may need to be tweaked a bit
+# Depending on hardware and location of dataset, command and paths in files need to be changed accordingly
 # may have to run export KMP_DUPLICATE_LIB_OK="TRUE" or $env:KMP_DUPLICATE_LIB_OK = "TRUE" on powershell
-python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 12 --num_epochs 50 --model_name x3d_s --mixed_precision
+python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir stable_checkpoints
 ```
 
 ## Project Structure
@@ -72,12 +72,7 @@ backend
 ├── main.py
 ├── model.py
 ├── torch_detection.py
-├── violence_events.db
-├── results
-│   ├── 1d64dcbf-c608-4d36-b02f-272458187838_result.json
-│   ├── history.json
-│   ├── clips/
-│   └── stream_thumbnails/
+├── stable_best_model.pth
 ├── trainingpipeline
 │   ├── constraints.txt
 │   ├── train_x3d_violence.py
@@ -88,12 +83,6 @@ backend
 │   │   ├── best_model.pth
 │   │   ├── training_curves.png
 │   │   └── training_history.json
-│   └── __pycache__
-│       ├── x3d_dataset.cpython-311.pyc
-│       ├── x3d_model.cpython-311.pyc
-│       └── x3d_trainer.cpython-311.pyc
-└── uploads
-    └── 1d64dcbf-c608-4d36-b02f-272458187838_2lrARl7utL4_1.avi
 
 frontend
 ├── public
@@ -106,10 +95,12 @@ frontend
 │   ├── index.css
 │   ├── main.jsx
 │   ├── components
+│   │   ├── LiveStreamDashboard.jsx
 │   │   ├── LandingPage.jsx
 │   │   ├── Navigation.jsx
 │   │   ├── ProcessingDashboard.jsx
 │   │   ├── ResultsViewer.jsx
+│   │   ├── StreamFullScreen.jsx
 │   │   ├── UploadInterface.jsx
 │   │   ├── react-bits
 │   │   │   ├── Animations
