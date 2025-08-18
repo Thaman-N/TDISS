@@ -27,7 +27,8 @@ const Navigation = ({ darkMode, toggleDarkMode, currentTheme, setTheme, availabl
   const navItems = [
     { path: '/', label: 'Home' },
     { path: '/upload', label: 'Upload' },
-    { path: '/dashboard', label: 'Dashboard' },
+    { path: '/live-streams', label: 'Live Streams' },
+    { path: '/dashboard', label: 'Dashboard' }
   ]
 
   const isActive = (path) => location.pathname === path

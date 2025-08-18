@@ -1,14 +1,19 @@
 """
-X3D Violence Detection Training Script
+STABLE X3D Violence Detection Training Script
 
-This script trains an X3D model with motion enhancement for real-time violence detection.
+This script trains an X3D model with GRADIENT CLIPPING and STABILITY IMPROVEMENTS
+to fix the extreme logit values issue.
+
 Optimized for RTX 5090 with CUDA 12.8 and 24GB VRAM.
 
 Usage:
-    python train_x3d_violence.py --dataset_path /path/to/RWF-2000 --batch_size 16 --num_epochs 50
+    python train_stable_x3d.py --dataset_path /path/to/RWF-2000 --batch_size 8 --num_epochs 30
 """
 
 import os
+# Fix OpenMP duplicate library issue on Windows
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import sys
 import argparse
 import torch
@@ -19,10 +24,10 @@ from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 
-# Import our modules
+# Import our FIXED modules
 from x3d_dataset import create_dataloaders
-from x3d_model import create_model, FocalLoss
-from x3d_trainer import X3DTrainer, create_optimizer_and_scheduler
+from x3d_model import create_model, StableCrossEntropyLoss
+from x3d_trainer import StableX3DTrainer, create_stable_optimizer_and_scheduler
 
 
 def set_seed(seed: int = 42):
@@ -40,7 +45,7 @@ def set_seed(seed: int = 42):
 def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
-        description="Train X3D model for violence detection",
+        description="Train STABLE X3D model for violence detection",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
@@ -55,7 +60,7 @@ def parse_args():
         "--max_videos_per_class", 
         type=int, 
         default=None,
-        help="Maximum videos per class (for testing with smaller dataset)"
+        help="Maximum videos per class (for testing)"
     )
     
     # Model arguments
@@ -72,82 +77,63 @@ def parse_args():
         default=True,
         help="Use motion enhancement with optical flow"
     )
-    parser.add_argument(
-        "--clip_len", 
-        type=int, 
-        default=16,
-        help="Number of frames per clip"
-    )
-    parser.add_argument(
-        "--spatial_size", 
-        type=int, 
-        default=224,
-        help="Spatial resolution of frames"
-    )
     
-    # Training arguments
+    # STABLE Training arguments
     parser.add_argument(
         "--batch_size", 
         type=int, 
-        default=12,
-        help="Batch size (optimized for RTX 5090 24GB)"
+        default=8,  # Reduced from 12 for stability
+        help="Batch size (reduced for stability)"
     )
     parser.add_argument(
         "--num_epochs", 
         type=int, 
-        default=50,
+        default=30,  # Reduced from 50
         help="Number of training epochs"
     )
     parser.add_argument(
         "--learning_rate", 
         type=float, 
-        default=1e-4,
-        help="Initial learning rate"
+        default=5e-5,  # MUCH lower than 1e-4
+        help="Initial learning rate (STABLE)"
     )
     parser.add_argument(
         "--weight_decay", 
         type=float, 
-        default=1e-4,
+        default=1e-5,  # Lower weight decay
         help="Weight decay for regularization"
+    )
+    parser.add_argument(
+        "--gradient_clip_val", 
+        type=float, 
+        default=1.0,  # CRITICAL for stability
+        help="Gradient clipping value"
+    )
+    parser.add_argument(
+        "--warmup_epochs", 
+        type=int, 
+        default=3,
+        help="Number of warmup epochs"
     )
     parser.add_argument(
         "--scheduler", 
         type=str, 
-        default="cosine",
+        default="plateau",  # More responsive
         choices=["cosine", "step", "plateau", "none"],
         help="Learning rate scheduler"
     )
     parser.add_argument(
         "--patience", 
         type=int, 
-        default=10,
+        default=15,  # Increased patience
         help="Early stopping patience"
     )
     
-    # Loss function arguments
-    parser.add_argument(
-        "--loss_type", 
-        type=str, 
-        default="focal",
-        choices=["cross_entropy", "focal"],
-        help="Loss function type"
-    )
-    parser.add_argument(
-        "--focal_alpha", 
-        type=float, 
-        default=0.25,
-        help="Focal loss alpha parameter"
-    )
-    parser.add_argument(
-        "--focal_gamma", 
-        type=float, 
-        default=2.0,
-        help="Focal loss gamma parameter"
-    )
+    # Loss function arguments  
     parser.add_argument(
         "--label_smoothing", 
         type=float, 
-        default=0.1,
+        default=0.05,  # Reduced smoothing
         help="Label smoothing factor"
     )
     
@@ -155,7 +141,7 @@ def parse_args():
     parser.add_argument(
         "--num_workers", 
         type=int, 
-        default=8,
+        default=6,  # Slightly reduced
         help="Number of data loader workers"
     )
     parser.add_argument(
@@ -167,7 +153,7 @@ def parse_args():
     parser.add_argument(
         "--checkpoint_dir", 
         type=str, 
-        default="checkpoints",
+        default="stable_checkpoints",
         help="Directory to save checkpoints"
     )
     parser.add_argument(
@@ -189,7 +175,7 @@ def parse_args():
 def print_system_info():
     """Print system and environment information"""
     print("="*60)
-    print("SYSTEM INFORMATION")
+    print("STABLE TRAINING - SYSTEM INFORMATION")
     print("="*60)
     
     # PyTorch version
@@ -212,14 +198,6 @@ def print_system_info():
             print(f"Current GPU memory: {current_memory:.2f} GB allocated, {cached_memory:.2f} GB cached")
     else:
         print("CUDA available: No")
-    
-    # Memory info
-    try:
-        import psutil
-        memory = psutil.virtual_memory()
-        print(f"System RAM: {memory.total / 1e9:.1f} GB total, {memory.available / 1e9:.1f} GB available")
-    except ImportError:
-        print("System RAM: psutil not available")
     
     print("="*60)
 
@@ -259,18 +237,11 @@ def validate_args(args):
         if fight_videos == 0 or nonfight_videos == 0:
             raise ValueError(f"No videos found in {split} split")
     
-    # Validate batch size for GPU memory
-    if torch.cuda.is_available():
-        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
-        if args.batch_size > 16 and gpu_memory < 20:
-            print(f"WARNING: Batch size {args.batch_size} might be too large for {gpu_memory:.1f}GB GPU")
-            print("Consider reducing batch size if you encounter out-of-memory errors")
-    
     print("Arguments validated successfully!")
 
 
 def main():
-    """Main training function"""
+    """Main training function with STABILITY IMPROVEMENTS"""
     # Parse arguments
     args = parse_args()
     
@@ -283,10 +254,17 @@ def main():
     # Validate arguments
     validate_args(args)
     
-    # Print training configuration
+    # Print STABLE training configuration
     print("\n" + "="*60)
-    print("TRAINING CONFIGURATION")
+    print("STABLE TRAINING CONFIGURATION")
     print("="*60)
+    print("🔧 STABILITY IMPROVEMENTS:")
+    print(f"   - Gradient clipping: {args.gradient_clip_val}")
+    print(f"   - Learning rate warmup: {args.warmup_epochs} epochs")
+    print(f"   - Conservative LR: {args.learning_rate}")
+    print(f"   - Stable loss: CrossEntropy (no Focal Loss)")
+    print(f"   - Enhanced monitoring")
+    print("")
     for key, value in vars(args).items():
         print(f"{key:25}: {value}")
     print("="*60)
@@ -308,13 +286,13 @@ def main():
         dataset_path=args.dataset_path,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        clip_len=args.clip_len,
-        spatial_size=args.spatial_size,
+        clip_len=16,
+        spatial_size=224,
         max_videos_per_class=args.max_videos_per_class
     )
     
-    # Create model
-    print("\nCreating model...")
+    # Create STABLE model
+    print("\nCreating STABLE model...")
     model = create_model(
         model_name=args.model_name,
         num_classes=2,
@@ -322,32 +300,27 @@ def main():
         device=device
     )
     
-    # Create loss function
-    print("\nCreating loss function...")
-    if args.loss_type == "focal":
-        criterion = FocalLoss(
-            alpha=args.focal_alpha,
-            gamma=args.focal_gamma,
-            label_smoothing=args.label_smoothing
-        )
-        print(f"Using Focal Loss (alpha={args.focal_alpha}, gamma={args.focal_gamma})")
-    else:
-        criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
-        print(f"Using Cross Entropy Loss (label_smoothing={args.label_smoothing})")
+    # Create STABLE loss function (CrossEntropy instead of Focal)
+    print("\nCreating STABLE loss function...")
+    criterion = StableCrossEntropyLoss(
+        label_smoothing=args.label_smoothing
+    )
+    print(f"Using Stable CrossEntropy Loss (label_smoothing={args.label_smoothing})")
     
-    # Create optimizer and scheduler
-    print("\nCreating optimizer and scheduler...")
-    optimizer, scheduler = create_optimizer_and_scheduler(
+    # Create STABLE optimizer and scheduler
+    print("\nCreating STABLE optimizer and scheduler...")
+    optimizer, scheduler = create_stable_optimizer_and_scheduler(
         model=model,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         scheduler_type=args.scheduler if args.scheduler != "none" else None,
-        num_epochs=args.num_epochs
+        num_epochs=args.num_epochs,
+        warmup_epochs=args.warmup_epochs
     )
     
-    # Create trainer
-    print("\nCreating trainer...")
-    trainer = X3DTrainer(
+    # Create STABLE trainer
+    print("\nCreating STABLE trainer...")
+    trainer = StableX3DTrainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -357,11 +330,13 @@ def main():
         device=device,
         mixed_precision=args.mixed_precision,
         checkpoint_dir=args.checkpoint_dir,
-        patience=args.patience
+        patience=args.patience,
+        gradient_clip_val=args.gradient_clip_val,
+        warmup_epochs=args.warmup_epochs
     )
     
-    # Start training
-    print("\nStarting training...")
+    # Start STABLE training
+    print("\n🚀 Starting STABLE training...")
     try:
         history = trainer.train(
             num_epochs=args.num_epochs,
@@ -369,20 +344,31 @@ def main():
         )
         
         print("\n" + "="*60)
-        print("TRAINING COMPLETED SUCCESSFULLY!")
+        print("🎉 STABLE TRAINING COMPLETED SUCCESSFULLY!")
         print("="*60)
         print(f"Best validation accuracy: {max(history['val_acc']):.2f}%")
         print(f"Best validation F1 score: {max(history['val_f1']):.2f}%")
+        print(f"Final gradient norm: {history['gradient_norms'][-1]:.3f}")
         print(f"Checkpoints saved to: {args.checkpoint_dir}")
+        
+        # Verify model stability
+        final_grad_norm = history['gradient_norms'][-1] if history['gradient_norms'] else 0
+        if final_grad_norm < 2.0:
+            print("✅ Model training appears STABLE (low gradient norms)")
+        else:
+            print("⚠️  Model may still have stability issues")
+        
         print("="*60)
         
     except KeyboardInterrupt:
-        print("\nTraining interrupted by user!")
+        print("\n⏹️  Training interrupted by user!")
         print("Checkpoints have been saved.")
         
     except Exception as e:
-        print(f"\nTraining failed with error: {e}")
+        print(f"\n❌ Training failed with error: {e}")
         print("Check the logs and try again.")
+        import traceback
+        traceback.print_exc()
         raise
     
     finally:

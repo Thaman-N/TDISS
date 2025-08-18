@@ -1,5 +1,5 @@
 import React from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom'
 import { Toaster } from 'sonner'
 // import useTheme from './hooks/useTheme'
 // import useDarkMode from './hooks/useDarkMode'
@@ -10,8 +10,11 @@ import ProcessingDashboard from './components/ProcessingDashboard'
 import ResultsViewer from './components/ResultsViewer'
 import Navigation from './components/Navigation'
 import { WebSocketProvider } from './contexts/WebSocketContext'
+import LiveStreamDashboard from './components/LiveStreamDashboard'
+import StreamFullScreen from './components/StreamFullScreen'
 
-function App() {
+function AppContent() {
+  const location = useLocation()
   const { 
     darkMode, 
     toggleDarkMode, 
@@ -21,10 +24,13 @@ function App() {
     getThemeName 
   } = useTheme()
 
+  // Hide navigation for fullscreen routes
+  const isFullscreenRoute = location.pathname.startsWith('/stream-fullscreen')
+
   return (
     <div className={`min-h-screen ${darkMode ? 'dark' : ''}`} data-theme={currentTheme}>
-      <Router>
-        <WebSocketProvider>
+      <WebSocketProvider>
+        {!isFullscreenRoute && (
           <Navigation 
             darkMode={darkMode}
             toggleDarkMode={toggleDarkMode}
@@ -33,23 +39,33 @@ function App() {
             availableThemes={availableThemes}
             getThemeName={getThemeName}
           />
-          
-          <Routes>
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/upload" element={<UploadInterface />} />
-            <Route path="/dashboard" element={<ProcessingDashboard />} />
-            <Route path="/results/:jobId" element={<ResultsViewer />} />
-          </Routes>
-          
-          <Toaster 
-            position="top-right"
-            richColors
-            expand={true}
-            closeButton
-          />
-        </WebSocketProvider>
-      </Router>
+        )}
+        
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/upload" element={<UploadInterface />} />
+          <Route path="/dashboard" element={<ProcessingDashboard />} />
+          <Route path="/results/:jobId" element={<ResultsViewer />} />
+          <Route path="/live-streams" element={<LiveStreamDashboard />} />
+          <Route path="/stream-fullscreen/:streamId" element={<StreamFullScreen />} />
+        </Routes>
+        
+        <Toaster 
+          position="top-right"
+          richColors
+          expand={true}
+          closeButton
+        />
+      </WebSocketProvider>
     </div>
+  )
+}
+
+function App() {
+  return (
+    <Router>
+      <AppContent />
+    </Router>
   )
 }
 

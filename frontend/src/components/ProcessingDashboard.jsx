@@ -262,7 +262,7 @@ const ProcessingDashboard = () => {
         <CardDescription className="flex items-center space-x-4">
           <span className="flex items-center">
             <Calendar className="h-3 w-3 mr-1" />
-            {format(new Date(job.timestamp), 'MMM dd, HH:mm')}
+            {job.timestamp ? format(new Date(job.timestamp), 'MMM dd, HH:mm') : 'No date'}
           </span>
           {job.metadata && (
             <span className="flex items-center">
@@ -381,7 +381,7 @@ const ProcessingDashboard = () => {
           </Badge>
         </div>
         <CardDescription>
-          {format(new Date(item.timestamp), 'MMM dd, yyyy HH:mm')}
+          {item.timestamp ? format(new Date(item.timestamp), 'MMM dd, yyyy HH:mm') : 'No date'}
         </CardDescription>
       </CardHeader>
       
@@ -449,10 +449,10 @@ const ProcessingDashboard = () => {
           box-shadow: 0 12px 25px rgba(0, 0, 0, 0.1);
           border-color: hsl(var(--primary) / 0.2);
         }
-        .stat-card:hover .stat-value {
-          transform: scale(1.1);
-          color: hsl(var(--primary));
-        }
+        // .stat-card:hover .stat-value {
+        //   transform: scale(1.1);
+        //   color: hsl(var(--primary));
+        // }
         
         .connection-badge {
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);

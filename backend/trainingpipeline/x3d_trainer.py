@@ -14,10 +14,10 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
-class X3DTrainer:
+class StableX3DTrainer:
     """
-    Advanced trainer for X3D violence detection with mixed precision training,
-    learning rate scheduling, and comprehensive monitoring.
+    FIXED trainer for X3D violence detection with gradient clipping,
+    learning rate warmup, and stability improvements.
     """
     
     def __init__(
@@ -32,23 +32,15 @@ class X3DTrainer:
         mixed_precision: bool = True,
         checkpoint_dir: str = "checkpoints",
         log_interval: int = 10,
-        patience: int = 10,
-        min_delta: float = 1e-4
+        patience: int = 15,  # Increased patience
+        min_delta: float = 1e-3,
+        gradient_clip_val: float = 1.0,  # CRITICAL: Gradient clipping
+        warmup_epochs: int = 3  # Warmup period
     ):
         """
         Args:
-            model: X3D violence detection model
-            train_loader: Training data loader
-            val_loader: Validation data loader
-            criterion: Loss function
-            optimizer: Optimizer
-            scheduler: Learning rate scheduler
-            device: Device to train on
-            mixed_precision: Whether to use mixed precision training
-            checkpoint_dir: Directory to save checkpoints
-            log_interval: Logging interval
-            patience: Early stopping patience
-            min_delta: Minimum change for early stopping
+            gradient_clip_val: Maximum gradient norm (prevents explosion)
+            warmup_epochs: Number of warmup epochs with reduced learning rate
         """
         self.model = model
         self.train_loader = train_loader
@@ -61,14 +53,21 @@ class X3DTrainer:
         self.log_interval = log_interval
         self.patience = patience
         self.min_delta = min_delta
+        self.gradient_clip_val = gradient_clip_val
+        self.warmup_epochs = warmup_epochs
         
         # Create checkpoint directory
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
-        # Mixed precision scaler
+        # Mixed precision scaler with more conservative settings
         if self.mixed_precision:
-            self.scaler = GradScaler()
+            self.scaler = GradScaler(
+                init_scale=2.0**10,  # Lower initial scale
+                growth_factor=2.0,
+                backoff_factor=0.5,
+                growth_interval=1000  # More conservative growth
+            )
         
         # Training history
         self.history = {
@@ -79,27 +78,64 @@ class X3DTrainer:
             'val_precision': [],
             'val_recall': [],
             'val_f1': [],
-            'learning_rates': []
+            'learning_rates': [],
+            'gradient_norms': []  # Track gradient norms
         }
         
         # Best validation metrics
         self.best_val_acc = 0.0
         self.best_val_f1 = 0.0
+        self.best_val_loss = float('inf')
         self.epochs_without_improvement = 0
         
-        print(f"Trainer initialized with:")
+        # Store initial learning rate for warmup
+        self.base_lr = self.optimizer.param_groups[0]['lr']
+        
+        print(f"STABLE Trainer initialized with:")
         print(f"  Device: {device}")
         print(f"  Mixed precision: {mixed_precision}")
+        print(f"  Gradient clipping: {gradient_clip_val}")
+        print(f"  Warmup epochs: {warmup_epochs}")
+        print(f"  Base learning rate: {self.base_lr}")
         print(f"  Checkpoint dir: {checkpoint_dir}")
         print(f"  Early stopping patience: {patience}")
     
+    def _apply_warmup(self, epoch: int):
+        """Apply learning rate warmup for stability"""
+        if epoch < self.warmup_epochs:
+            warmup_factor = (epoch + 1) / self.warmup_epochs
+            current_lr = self.base_lr * warmup_factor
+            
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = current_lr
+            
+            print(f"Warmup epoch {epoch+1}/{self.warmup_epochs}: lr = {current_lr:.6f}")
+    
+    def _clip_gradients(self) -> float:
+        """Clip gradients and return the gradient norm"""
+        if self.mixed_precision:
+            # Unscale gradients before clipping
+            self.scaler.unscale_(self.optimizer)
+        
+        # Compute gradient norm before clipping
+        total_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), 
+            self.gradient_clip_val
+        )
+        
+        return total_norm.item()
+    
     def train_epoch(self, epoch: int) -> Dict[str, float]:
-        """Train for one epoch"""
+        """Train for one epoch with stability improvements"""
         self.model.train()
+        
+        # Apply warmup
+        self._apply_warmup(epoch)
         
         total_loss = 0.0
         all_predictions = []
         all_labels = []
+        gradient_norms = []
         
         progress_bar = tqdm(
             self.train_loader, 
@@ -125,15 +161,32 @@ class X3DTrainer:
                     outputs = self.model(data)
                     loss = self.criterion(outputs, labels)
                 
-                # Backward pass
+                # Backward pass with gradient scaling
                 self.scaler.scale(loss).backward()
+                
+                # CRITICAL: Gradient clipping
+                grad_norm = self._clip_gradients()
+                
+                # Check for gradient explosion
+                if grad_norm > 10.0:  # Threshold for concern
+                    print(f"WARNING: Large gradient norm detected: {grad_norm:.2f}")
+                
+                # Optimizer step
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
+                
             else:
                 outputs = self.model(data)
                 loss = self.criterion(outputs, labels)
                 loss.backward()
+                
+                # Gradient clipping
+                grad_norm = self._clip_gradients()
+                
                 self.optimizer.step()
+            
+            # Track gradient norms
+            gradient_norms.append(grad_norm)
             
             # Statistics
             total_loss += loss.item()
@@ -145,16 +198,28 @@ class X3DTrainer:
             if batch_idx % self.log_interval == 0:
                 progress_bar.set_postfix({
                     'loss': f'{loss.item():.4f}',
+                    'grad_norm': f'{grad_norm:.2f}',
                     'lr': f'{self.optimizer.param_groups[0]["lr"]:.2e}'
                 })
+            
+            # Early detection of training instability
+            if loss.item() > 100 or torch.isnan(loss):
+                print(f"CRITICAL: Training instability detected! Loss: {loss.item()}")
+                print(f"Gradient norm: {grad_norm}")
+                raise RuntimeError("Training became unstable")
         
         # Calculate metrics
         avg_loss = total_loss / len(self.train_loader)
         accuracy = accuracy_score(all_labels, all_predictions) * 100
+        avg_grad_norm = np.mean(gradient_norms)
+        
+        # Store gradient norm for monitoring
+        self.history['gradient_norms'].append(avg_grad_norm)
         
         return {
             'loss': avg_loss,
-            'accuracy': accuracy
+            'accuracy': accuracy,
+            'avg_gradient_norm': avg_grad_norm
         }
     
     def validate_epoch(self, epoch: int) -> Dict[str, float]:
@@ -191,6 +256,11 @@ class X3DTrainer:
                     outputs = self.model(data)
                     loss = self.criterion(outputs, labels)
                 
+                # Check for reasonable logit values
+                logit_range = outputs.max().item() - outputs.min().item()
+                if logit_range > 50:  # Warning threshold
+                    print(f"WARNING: Large logit range detected: {logit_range:.2f}")
+                
                 # Statistics
                 total_loss += loss.item()
                 predictions = outputs.argmax(dim=1)
@@ -224,13 +294,15 @@ class X3DTrainer:
         }
     
     def save_checkpoint(self, epoch: int, metrics: Dict[str, float], is_best: bool = False):
-        """Save model checkpoint"""
+        """Save model checkpoint with additional metadata"""
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'metrics': metrics,
-            'history': self.history
+            'history': self.history,
+            'gradient_clip_val': self.gradient_clip_val,
+            'base_lr': self.base_lr
         }
         
         if self.scheduler is not None:
@@ -240,14 +312,14 @@ class X3DTrainer:
             checkpoint['scaler_state_dict'] = self.scaler.state_dict()
         
         # Save regular checkpoint
-        checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch+1}.pth"
+        checkpoint_path = self.checkpoint_dir / f"stable_checkpoint_epoch_{epoch+1}.pth"
         torch.save(checkpoint, checkpoint_path)
         
         # Save best model
         if is_best:
-            best_path = self.checkpoint_dir / "best_model.pth"
+            best_path = self.checkpoint_dir / "stable_best_model.pth"
             torch.save(checkpoint, best_path)
-            print(f"New best model saved! Val Acc: {metrics['accuracy']:.2f}%, Val F1: {metrics['f1']:.2f}%")
+            print(f"★ NEW BEST MODEL ★ Val Acc: {metrics['accuracy']:.2f}%, Val Loss: {metrics['loss']:.4f}")
         
         return checkpoint_path
     
@@ -267,38 +339,14 @@ class X3DTrainer:
         if 'history' in checkpoint:
             self.history = checkpoint['history']
             
-        print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
+        print(f"Loaded stable checkpoint from epoch {checkpoint['epoch']}")
         return checkpoint['epoch']
     
-    def plot_confusion_matrix(self, cm: np.ndarray, epoch: int):
-        """Plot and save confusion matrix"""
-        plt.figure(figsize=(8, 6))
-        
-        class_names = ['Non-Violence', 'Violence']
-        sns.heatmap(
-            cm, 
-            annot=True, 
-            fmt='d', 
-            cmap='Blues',
-            xticklabels=class_names,
-            yticklabels=class_names,
-            cbar=True
-        )
-        
-        plt.title(f'Confusion Matrix - Epoch {epoch+1}')
-        plt.xlabel('Predicted Label')
-        plt.ylabel('True Label')
-        
-        # Save the plot
-        cm_path = self.checkpoint_dir / f"confusion_matrix_epoch_{epoch+1}.png"
-        plt.savefig(cm_path, dpi=150, bbox_inches='tight')
-        plt.close()
-    
     def plot_training_curves(self):
-        """Plot and save training curves"""
+        """Plot enhanced training curves with gradient monitoring"""
         epochs = range(1, len(self.history['train_loss']) + 1)
         
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         
         # Loss curves
         axes[0, 0].plot(epochs, self.history['train_loss'], 'b-', label='Train Loss', linewidth=2)
@@ -308,6 +356,7 @@ class X3DTrainer:
         axes[0, 0].set_ylabel('Loss')
         axes[0, 0].legend()
         axes[0, 0].grid(True, alpha=0.3)
+        axes[0, 0].set_yscale('log')  # Log scale for better visualization
         
         # Accuracy curves
         axes[0, 1].plot(epochs, self.history['train_acc'], 'b-', label='Train Accuracy', linewidth=2)
@@ -319,38 +368,53 @@ class X3DTrainer:
         axes[0, 1].grid(True, alpha=0.3)
         
         # F1 Score
-        axes[1, 0].plot(epochs, self.history['val_f1'], 'g-', label='Val F1 Score', linewidth=2)
-        axes[1, 0].set_title('Validation F1 Score')
-        axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('F1 Score (%)')
-        axes[1, 0].legend()
-        axes[1, 0].grid(True, alpha=0.3)
+        axes[0, 2].plot(epochs, self.history['val_f1'], 'g-', label='Val F1 Score', linewidth=2)
+        axes[0, 2].set_title('Validation F1 Score')
+        axes[0, 2].set_xlabel('Epoch')
+        axes[0, 2].set_ylabel('F1 Score (%)')
+        axes[0, 2].legend()
+        axes[0, 2].grid(True, alpha=0.3)
         
         # Learning Rate
-        axes[1, 1].plot(epochs, self.history['learning_rates'], 'orange', linewidth=2)
-        axes[1, 1].set_title('Learning Rate Schedule')
-        axes[1, 1].set_xlabel('Epoch')
-        axes[1, 1].set_ylabel('Learning Rate')
-        axes[1, 1].set_yscale('log')
-        axes[1, 1].grid(True, alpha=0.3)
+        axes[1, 0].plot(epochs, self.history['learning_rates'], 'orange', linewidth=2)
+        axes[1, 0].set_title('Learning Rate Schedule')
+        axes[1, 0].set_xlabel('Epoch')
+        axes[1, 0].set_ylabel('Learning Rate')
+        axes[1, 0].set_yscale('log')
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # CRITICAL: Gradient Norms (stability indicator)
+        if self.history['gradient_norms']:
+            axes[1, 1].plot(epochs, self.history['gradient_norms'], 'purple', linewidth=2)
+            axes[1, 1].axhline(y=self.gradient_clip_val, color='red', linestyle='--', 
+                              label=f'Clip Value ({self.gradient_clip_val})')
+            axes[1, 1].set_title('Gradient Norms (Stability Monitor)')
+            axes[1, 1].set_xlabel('Epoch')
+            axes[1, 1].set_ylabel('Gradient Norm')
+            axes[1, 1].legend()
+            axes[1, 1].grid(True, alpha=0.3)
+            axes[1, 1].set_yscale('log')
+        
+        # Training stability indicator
+        if len(self.history['val_loss']) > 1:
+            loss_volatility = [abs(self.history['val_loss'][i] - self.history['val_loss'][i-1]) 
+                             for i in range(1, len(self.history['val_loss']))]
+            axes[1, 2].plot(range(2, len(epochs)+1), loss_volatility, 'red', linewidth=2)
+            axes[1, 2].set_title('Validation Loss Volatility')
+            axes[1, 2].set_xlabel('Epoch')
+            axes[1, 2].set_ylabel('|ΔLoss|')
+            axes[1, 2].grid(True, alpha=0.3)
         
         plt.tight_layout()
-        curves_path = self.checkpoint_dir / "training_curves.png"
+        curves_path = self.checkpoint_dir / "stable_training_curves.png"
         plt.savefig(curves_path, dpi=150, bbox_inches='tight')
         plt.close()
         
-        print(f"Training curves saved to {curves_path}")
+        print(f"Enhanced training curves saved to {curves_path}")
     
     def train(self, num_epochs: int, resume_from: Optional[str] = None) -> Dict[str, List[float]]:
         """
-        Train the model
-        
-        Args:
-            num_epochs: Number of epochs to train
-            resume_from: Path to checkpoint to resume from
-            
-        Returns:
-            Training history
+        Train the model with stability monitoring
         """
         start_epoch = 0
         
@@ -358,86 +422,105 @@ class X3DTrainer:
         if resume_from and Path(resume_from).exists():
             start_epoch = self.load_checkpoint(resume_from)
         
-        print(f"\nStarting training for {num_epochs} epochs...")
+        print(f"\n{'='*60}")
+        print(f"STARTING STABLE TRAINING FOR {num_epochs} EPOCHS")
+        print(f"{'='*60}")
         print(f"Training samples: {len(self.train_loader.dataset)}")
         print(f"Validation samples: {len(self.val_loader.dataset)}")
-        print("="*50)
+        print(f"Batch size: {self.train_loader.batch_size}")
+        print(f"Gradient clipping: {self.gradient_clip_val}")
+        print(f"Warmup epochs: {self.warmup_epochs}")
+        print("="*60)
         
         training_start_time = time.time()
         
-        for epoch in range(start_epoch, num_epochs):
-            epoch_start_time = time.time()
-            
-            # Train
-            train_metrics = self.train_epoch(epoch)
-            
-            # Validate
-            val_metrics = self.validate_epoch(epoch)
-            
-            # Update learning rate
-            if self.scheduler is not None:
-                if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step(val_metrics['loss'])
+        try:
+            for epoch in range(start_epoch, num_epochs):
+                epoch_start_time = time.time()
+                
+                # Train
+                train_metrics = self.train_epoch(epoch)
+                
+                # Validate
+                val_metrics = self.validate_epoch(epoch)
+                
+                # Update learning rate (after warmup)
+                if epoch >= self.warmup_epochs and self.scheduler is not None:
+                    if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                        self.scheduler.step(val_metrics['loss'])
+                    else:
+                        self.scheduler.step()
+                
+                # Record history
+                self.history['train_loss'].append(train_metrics['loss'])
+                self.history['train_acc'].append(train_metrics['accuracy'])
+                self.history['val_loss'].append(val_metrics['loss'])
+                self.history['val_acc'].append(val_metrics['accuracy'])
+                self.history['val_precision'].append(val_metrics['precision'])
+                self.history['val_recall'].append(val_metrics['recall'])
+                self.history['val_f1'].append(val_metrics['f1'])
+                self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
+                
+                # Check for improvement (use validation loss as primary metric)
+                is_best = False
+                if val_metrics['loss'] < self.best_val_loss - self.min_delta:
+                    self.best_val_loss = val_metrics['loss']
+                    self.best_val_acc = val_metrics['accuracy']
+                    self.best_val_f1 = val_metrics['f1']
+                    self.epochs_without_improvement = 0
+                    is_best = True
                 else:
-                    self.scheduler.step()
-            
-            # Record history
-            self.history['train_loss'].append(train_metrics['loss'])
-            self.history['train_acc'].append(train_metrics['accuracy'])
-            self.history['val_loss'].append(val_metrics['loss'])
-            self.history['val_acc'].append(val_metrics['accuracy'])
-            self.history['val_precision'].append(val_metrics['precision'])
-            self.history['val_recall'].append(val_metrics['recall'])
-            self.history['val_f1'].append(val_metrics['f1'])
-            self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
-            
-            # Check for improvement
-            is_best = False
-            if val_metrics['accuracy'] > self.best_val_acc + self.min_delta:
-                self.best_val_acc = val_metrics['accuracy']
-                self.best_val_f1 = val_metrics['f1']
-                self.epochs_without_improvement = 0
-                is_best = True
-            else:
-                self.epochs_without_improvement += 1
-            
-            # Save checkpoint
-            self.save_checkpoint(epoch, val_metrics, is_best)
-            
-            # Plot confusion matrix
-            self.plot_confusion_matrix(val_metrics['confusion_matrix'], epoch)
-            
-            # Print epoch results
-            epoch_time = time.time() - epoch_start_time
-            print(f"Epoch {epoch+1}/{num_epochs} - {epoch_time:.1f}s")
-            print(f"  Train Loss: {train_metrics['loss']:.4f}, Train Acc: {train_metrics['accuracy']:.2f}%")
-            print(f"  Val Loss: {val_metrics['loss']:.4f}, Val Acc: {val_metrics['accuracy']:.2f}%")
-            print(f"  Val Precision: {val_metrics['precision']:.2f}%, Val Recall: {val_metrics['recall']:.2f}%")
-            print(f"  Val F1: {val_metrics['f1']:.2f}%, LR: {self.optimizer.param_groups[0]['lr']:.2e}")
-            
-            if is_best:
-                print("  *** NEW BEST MODEL ***")
-            
-            print(f"  Epochs without improvement: {self.epochs_without_improvement}")
-            print("-" * 50)
-            
-            # Early stopping
-            if self.epochs_without_improvement >= self.patience:
-                print(f"Early stopping triggered after {epoch+1} epochs")
-                print(f"Best validation accuracy: {self.best_val_acc:.2f}%")
-                break
+                    self.epochs_without_improvement += 1
+                
+                # Save checkpoint
+                self.save_checkpoint(epoch, val_metrics, is_best)
+                
+                # Print epoch results
+                epoch_time = time.time() - epoch_start_time
+                print(f"\nEpoch {epoch+1}/{num_epochs} - {epoch_time:.1f}s")
+                print(f"  Train Loss: {train_metrics['loss']:.4f}, Train Acc: {train_metrics['accuracy']:.2f}%")
+                print(f"  Val Loss: {val_metrics['loss']:.4f}, Val Acc: {val_metrics['accuracy']:.2f}%")
+                print(f"  Val F1: {val_metrics['f1']:.2f}%, Grad Norm: {train_metrics['avg_gradient_norm']:.3f}")
+                print(f"  LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+                
+                if is_best:
+                    print("  ★ ★ ★ NEW BEST MODEL ★ ★ ★")
+                
+                print(f"  Epochs without improvement: {self.epochs_without_improvement}")
+                
+                # Stability warnings
+                if train_metrics['avg_gradient_norm'] > self.gradient_clip_val * 0.8:
+                    print(f"  ⚠️  WARNING: High gradient norms detected!")
+                
+                print("-" * 60)
+                
+                # Early stopping
+                if self.epochs_without_improvement >= self.patience:
+                    print(f"\n🛑 Early stopping triggered after {epoch+1} epochs")
+                    print(f"Best validation loss: {self.best_val_loss:.4f}")
+                    print(f"Best validation accuracy: {self.best_val_acc:.2f}%")
+                    break
+        
+        except Exception as e:
+            print(f"\n❌ Training failed: {e}")
+            raise
         
         # Training completed
         training_time = time.time() - training_start_time
-        print(f"\nTraining completed in {training_time/60:.2f} minutes")
+        print(f"\n{'='*60}")
+        print(f"🎉 TRAINING COMPLETED SUCCESSFULLY!")
+        print(f"{'='*60}")
+        print(f"Training time: {training_time/60:.2f} minutes")
+        print(f"Best validation loss: {self.best_val_loss:.4f}")
         print(f"Best validation accuracy: {self.best_val_acc:.2f}%")
         print(f"Best validation F1: {self.best_val_f1:.2f}%")
+        print("="*60)
         
         # Plot final training curves
         self.plot_training_curves()
         
         # Save final history
-        history_path = self.checkpoint_dir / "training_history.json"
+        history_path = self.checkpoint_dir / "stable_training_history.json"
         with open(history_path, 'w') as f:
             # Convert numpy arrays to lists for JSON serialization
             history_json = {}
@@ -453,78 +536,64 @@ class X3DTrainer:
         return self.history
 
 
-def create_optimizer_and_scheduler(
+def create_stable_optimizer_and_scheduler(
     model: nn.Module,
-    learning_rate: float = 1e-4,
-    weight_decay: float = 1e-4,
+    learning_rate: float = 5e-5,  # MUCH lower learning rate
+    weight_decay: float = 1e-5,   # Lower weight decay
     scheduler_type: str = "cosine",
     num_epochs: int = 50,
-    warmup_epochs: int = 5
+    warmup_epochs: int = 3
 ):
     """
-    Create optimizer and learning rate scheduler
-    
-    Args:
-        model: Model to optimize
-        learning_rate: Initial learning rate
-        weight_decay: Weight decay factor
-        scheduler_type: Type of scheduler ('cosine', 'step', 'plateau')
-        num_epochs: Total number of epochs
-        warmup_epochs: Number of warmup epochs
+    Create STABLE optimizer and learning rate scheduler
     """
-    # AdamW optimizer (works well with transformers)
+    # Use AdamW with more conservative settings
     optimizer = optim.AdamW(
         model.parameters(),
         lr=learning_rate,
         weight_decay=weight_decay,
-        betas=(0.9, 0.999),
+        betas=(0.9, 0.95),  # Slightly different betas
         eps=1e-8
     )
     
-    # Learning rate scheduler
+    # More conservative learning rate scheduling
     if scheduler_type == "cosine":
-        # Fix: Ensure T_max is at least 1 to avoid division by zero
         T_max = max(1, num_epochs - warmup_epochs)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=T_max,
-            eta_min=learning_rate * 0.01
+            eta_min=learning_rate * 0.1  # Higher minimum LR
         )
-        print(f"Cosine scheduler: T_max={T_max}, eta_min={learning_rate * 0.01}")
     elif scheduler_type == "step":
-        # For short training, use smaller milestones
-        if num_epochs <= 10:
-            milestones = [num_epochs // 2, 3 * num_epochs // 4]
-        else:
-            milestones = [num_epochs//3, 2*num_epochs//3]
+        milestones = [num_epochs//2, 3*num_epochs//4]
         scheduler = optim.lr_scheduler.MultiStepLR(
             optimizer,
             milestones=milestones,
-            gamma=0.1
+            gamma=0.3  # Less aggressive reduction
         )
-        print(f"Step scheduler: milestones={milestones}")
     elif scheduler_type == "plateau":
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode='min',
             factor=0.5,
-            patience=max(2, num_epochs // 10),  # Adaptive patience
-            threshold=1e-4,
-            min_lr=learning_rate * 0.01
+            patience=5,  # More responsive
+            threshold=1e-3,
+            min_lr=learning_rate * 0.1
         )
-        print(f"Plateau scheduler: patience={max(2, num_epochs // 10)}")
     else:
         scheduler = None
     
-    print(f"Optimizer: AdamW (lr={learning_rate}, wd={weight_decay})")
-    print(f"Scheduler: {scheduler_type}")
+    print(f"STABLE Optimizer: AdamW (lr={learning_rate}, wd={weight_decay})")
+    print(f"STABLE Scheduler: {scheduler_type}")
     
     return optimizer, scheduler
 
 
 if __name__ == "__main__":
-    # Test the trainer
-    print("Testing trainer components...")
-    
-    # This would normally be called from the main training script
-    print("Trainer test completed!")
+    print("STABLE X3D Trainer ready for use!")
+    print("Key improvements:")
+    print("- Gradient clipping to prevent explosion")
+    print("- Learning rate warmup for stability")
+    print("- Conservative learning rates")
+    print("- Enhanced monitoring and debugging")
+    print("- Stable loss function (CrossEntropy instead of Focal)")
