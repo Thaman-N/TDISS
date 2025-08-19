@@ -1,0 +1,31 @@
+# Test dependencies for the violence detection backend
+# Cross-platform compatible (Windows, Linux, macOS)
+
+# Core testing framework
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+
+# FastAPI testing
+httpx>=0.24.0
+
+# For mocking and testing
+responses>=0.23.0
+
+# Additional testing utilities
+faker>=18.0.0
+
+# Development and debugging
+pytest-xdist>=3.0.0  # for parallel test execution
+pytest-html>=3.1.0   # for HTML test reports
+pytest-json-report>=1.5.0  # for JSON test reports
+
+# Performance testing (cross-platform)
+pytest-benchmark>=4.0.0
+
+# For CI/CD environments  
+pytest-github-actions-annotate-failures>=0.1.0
+
+# Memory profiling (Linux/macOS only - will be skipped on Windows)
+pytest-memray>=1.0.0; sys_platform != "win32"

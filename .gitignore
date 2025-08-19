@@ -16,6 +16,8 @@ attention_checkpoints/
 uploads/
 results/
 *.db
+.benchmarks/
+.pytest_cache/
 
 # System files
 .DS_Store
