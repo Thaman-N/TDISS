@@ -1,5 +1,5 @@
 """
-STABLE X3D Violence Detection Training Script
+STABLE X3D Violence Detection Training Script - FIXED VERSION
 
 This script trains an X3D model with GRADIENT CLIPPING and STABILITY IMPROVEMENTS
 to fix the extreme logit values issue.
@@ -67,7 +67,7 @@ def parse_args():
     parser.add_argument(
         "--model_name", 
         type=str, 
-        default="x3d_s",
+        default="x3d_m",
         choices=["x3d_xs", "x3d_s", "x3d_m", "x3d_l"],
         help="X3D model variant"
     )
@@ -82,31 +82,31 @@ def parse_args():
     parser.add_argument(
         "--batch_size", 
         type=int, 
-        default=8,  # Reduced from 12 for stability
+        default=8,
         help="Batch size (reduced for stability)"
     )
     parser.add_argument(
         "--num_epochs", 
         type=int, 
-        default=30,  # Reduced from 50
+        default=30,
         help="Number of training epochs"
     )
     parser.add_argument(
         "--learning_rate", 
         type=float, 
-        default=5e-5,  # MUCH lower than 1e-4
+        default=5e-5,
         help="Initial learning rate (STABLE)"
     )
     parser.add_argument(
         "--weight_decay", 
         type=float, 
-        default=1e-5,  # Lower weight decay
+        default=1e-5,
         help="Weight decay for regularization"
     )
     parser.add_argument(
         "--gradient_clip_val", 
         type=float, 
-        default=1.0,  # CRITICAL for stability
+        default=1.0,
         help="Gradient clipping value"
     )
     parser.add_argument(
@@ -118,14 +118,14 @@ def parse_args():
     parser.add_argument(
         "--scheduler", 
         type=str, 
-        default="plateau",  # More responsive
+        default="plateau",
         choices=["cosine", "step", "plateau", "none"],
         help="Learning rate scheduler"
     )
     parser.add_argument(
         "--patience", 
         type=int, 
-        default=15,  # Increased patience
+        default=15,
         help="Early stopping patience"
     )
     
@@ -133,7 +133,7 @@ def parse_args():
     parser.add_argument(
         "--label_smoothing", 
         type=float, 
-        default=0.05,  # Reduced smoothing
+        default=0.05,
         help="Label smoothing factor"
     )
     
@@ -141,7 +141,7 @@ def parse_args():
     parser.add_argument(
         "--num_workers", 
         type=int, 
-        default=6,  # Slightly reduced
+        default=6,
         help="Number of data loader workers"
     )
     parser.add_argument(
@@ -299,6 +299,14 @@ def main():
         use_motion_enhancement=args.use_motion_enhancement,
         device=device
     )
+    
+    # FIXED: Do NOT manually cast model to float16 when using mixed precision
+    # Mixed precision training with autocast() handles this automatically
+    # and keeps gradients in float32 for stability
+    if args.mixed_precision:
+        print("Using mixed precision training with autocast (model stays in float32)")
+    else:
+        print("Using full precision training (float32)")
     
     # Create STABLE loss function (CrossEntropy instead of Focal)
     print("\nCreating STABLE loss function...")

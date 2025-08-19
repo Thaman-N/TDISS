@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import ReactPlayer from 'react-player'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -49,9 +48,13 @@ const ResultsViewer = () => {
   const navigate = useNavigate()
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [videoLoading, setVideoLoading] = useState(true)
+  const [videoError, setVideoError] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [playing, setPlaying] = useState(false)
-  const [playerRef, setPlayerRef] = useState(null)
+  
+  // Use useRef for the video element
+  const videoRef = useRef(null)
 
   useEffect(() => {
     fetchResult()
@@ -59,7 +62,16 @@ const ResultsViewer = () => {
 
   const fetchResult = async () => {
     try {
-      const response = await fetch(`/api/result/${jobId}`)
+      let response;
+      
+      // Check if this is a stream event or regular job
+      if (jobId.startsWith('stream-event-')) {
+        const eventId = jobId.replace('stream-event-', '')
+        response = await fetch(`/api/stream-event/${eventId}`)
+      } else {
+        response = await fetch(`/api/result/${jobId}`)
+      }
+      
       if (!response.ok) {
         throw new Error('Result not found')
       }
@@ -70,7 +82,12 @@ const ResultsViewer = () => {
       toast.error('Failed to load results', {
         description: error.message
       })
-      navigate('/dashboard')
+      // Navigate back to appropriate dashboard
+      if (jobId.startsWith('stream-event-')) {
+        navigate('/live-streams')
+      } else {
+        navigate('/dashboard')
+      }
     } finally {
       setLoading(false)
     }
@@ -82,42 +99,129 @@ const ResultsViewer = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
+  // Enhanced jump to time function for HTML5 video
   const jumpToTime = (time) => {
-    if (playerRef) {
-      playerRef.seekTo(time, 'seconds')
-      setCurrentTime(time)
+    if (videoRef.current && !videoError) {
+      try {
+        videoRef.current.currentTime = time
+        setCurrentTime(time)
+        if (videoRef.current.paused) {
+          videoRef.current.play()
+          setPlaying(true)
+        }
+        toast.success(`Jumped to ${formatTime(time)}`)
+      } catch (error) {
+        console.error('Error seeking to time:', error)
+        toast.error('Failed to jump to segment')
+      }
+    } else {
+      toast.warning('Video not available for seeking')
     }
   }
 
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text)
-    toast.success('Copied to clipboard')
+  // Enhanced clipboard function
+  const copyToClipboard = async (text) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+        toast.success('Copied to clipboard')
+      } else {
+        // Fallback for older browsers or non-HTTPS
+        const textArea = document.createElement('textarea')
+        textArea.value = text
+        document.body.appendChild(textArea)
+        textArea.focus()
+        textArea.select()
+        try {
+          document.execCommand('copy')
+          toast.success('Copied to clipboard')
+        } catch (err) {
+          toast.error('Failed to copy to clipboard')
+        }
+        document.body.removeChild(textArea)
+      }
+    } catch (err) {
+      console.error('Failed to copy: ', err)
+      toast.error('Failed to copy to clipboard')
+    }
   }
 
+  // Enhanced download function
   const downloadReport = () => {
-    const reportData = {
-      jobId: result.job_id,
-      filename: result.filename,
-      timestamp: result.timestamp,
-      analysis: {
-        hasViolence: result.has_violence,
-        confidence: result.overall_result.confidence,
-        segments: result.segments,
-        violenceDuration: result.violence_duration,
-        violencePercentage: result.violence_percentage
-      },
-      metadata: result.metadata
+    try {
+      const reportData = {
+        jobId: result.job_id,
+        filename: result.filename,
+        timestamp: result.timestamp,
+        analysis: {
+          hasViolence: result.has_violence,
+          confidence: result.overall_result.confidence,
+          segments: result.segments,
+          violenceDuration: result.violence_duration,
+          violencePercentage: result.violence_percentage
+        },
+        metadata: result.metadata,
+        modelInfo: result.model_info
+      }
+      
+      const blob = new Blob([JSON.stringify(reportData, null, 2)], { 
+        type: 'application/json' 
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `violence-analysis-${result.job_id}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      
+      toast.success('Report downloaded successfully')
+    } catch (error) {
+      console.error('Download error:', error)
+      toast.error('Failed to download report')
     }
-    
-    const blob = new Blob([JSON.stringify(reportData, null, 2)], { 
-      type: 'application/json' 
-    })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `violence-analysis-${result.job_id}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+  }
+
+  // Enhanced share function
+  const shareResults = async () => {
+    try {
+      const shareData = {
+        title: `Violence Analysis: ${result.filename}`,
+        text: `Analysis Results: ${result.has_violence ? 'Violence Detected' : 'No Violence Detected'} (${(result.overall_result.confidence * 100).toFixed(1)}% confidence)`,
+        url: window.location.href
+      }
+
+      if (navigator.share && window.isSecureContext) {
+        await navigator.share(shareData)
+        toast.success('Shared successfully')
+      } else {
+        await copyToClipboard(window.location.href)
+        toast.success('URL copied to clipboard')
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        console.error('Share error:', error)
+        toast.error('Failed to share')
+      }
+    }
+  }
+
+  // Context-aware back navigation
+  const getBackDestination = () => {
+    if (jobId.startsWith('stream-event-')) {
+      return '/live-streams'
+    } else {
+      return '/dashboard'
+    }
+  }
+
+  const getBackButtonText = () => {
+    if (jobId.startsWith('stream-event-')) {
+      return 'Back to Live Streams'
+    } else {
+      return 'Back to Dashboard'
+    }
   }
 
   // Create timeline data for visualization
@@ -148,6 +252,94 @@ const ResultsViewer = () => {
     return data
   }
 
+  // Get proper video URL with better debugging
+  const getVideoUrl = () => {
+    if (!result) return null
+    
+    console.log('Result video_path:', result.video_path)
+    
+    // For uploaded videos, construct the API endpoint
+    if (result.video_path) {
+      // Check if it's already a URL
+      if (result.video_path.startsWith('http') || result.video_path.startsWith('/api')) {
+        console.log('Using direct URL:', result.video_path)
+        return result.video_path
+      } else {
+        // Extract filename from path - handle both Windows and Unix paths
+        const filename = result.video_path.split(/[/\\]/).pop()
+        console.log('Extracted filename:', filename)
+        
+        const videoUrl = `/api/uploads/${filename}`
+        console.log('Constructed video URL:', videoUrl)
+        return videoUrl
+      }
+    }
+    
+    // For stream events, check clip_path
+    if (result.clip_path) {
+      console.log('Using clip_path:', result.clip_path)
+      return result.clip_path
+    }
+    
+    console.log('No video URL found')
+    return null
+  }
+
+  // Video event handlers
+  const handleVideoLoadStart = () => {
+    setVideoLoading(true)
+    setVideoError(false)
+    console.log('Video loading started')
+  }
+
+  const handleVideoCanPlay = () => {
+    setVideoLoading(false)
+    setVideoError(false)
+    console.log('Video can play')
+    toast.success('Video loaded successfully')
+  }
+
+  const handleVideoError = (e) => {
+    setVideoLoading(false)
+    setVideoError(true)
+    console.error('Video error:', e.target.error)
+    toast.error('Failed to load video')
+  }
+
+  const handleVideoTimeUpdate = () => {
+    if (videoRef.current) {
+      setCurrentTime(videoRef.current.currentTime)
+    }
+  }
+
+  const handlePlayPause = () => {
+    if (videoRef.current) {
+      if (videoRef.current.paused) {
+        videoRef.current.play()
+        setPlaying(true)
+      } else {
+        videoRef.current.pause()
+        setPlaying(false)
+      }
+    }
+  }
+
+  // Test video URL function
+  const testVideoUrl = async (url) => {
+    try {
+      const response = await fetch(url, { method: 'HEAD' })
+      if (response.ok) {
+        toast.success(`Video URL is accessible (${response.status})`)
+        console.log('Video response headers:', response.headers)
+      } else {
+        toast.error(`Video URL failed: ${response.status} ${response.statusText}`)
+      }
+    } catch (error) {
+      toast.error(`Video URL test failed: ${error.message}`)
+      console.error('Video URL test error:', error)
+    }
+  }
+
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-12 text-center">
@@ -165,15 +357,16 @@ const ResultsViewer = () => {
         <p className="text-muted-foreground mb-4">
           The analysis results could not be loaded.
         </p>
-        <Button onClick={() => navigate('/dashboard')}>
+        <Button onClick={() => navigate(getBackDestination())}>
           <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Dashboard
+          {getBackButtonText()}
         </Button>
       </div>
     )
   }
 
   const timelineData = createTimelineData()
+  const videoUrl = getVideoUrl()
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -362,19 +555,47 @@ const ResultsViewer = () => {
         .action-icon {
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
+        
+        /* Video container styling */
+        .video-container {
+          position: relative;
+          background: #000;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .video-element {
+          width: 100%;
+          height: 100%;
+          border-radius: 8px;
+        }
+        .video-fallback {
+          background: linear-gradient(135deg, #1f2937, #111827);
+          border: 2px dashed #374151;
+          border-radius: 8px;
+        }
       `}</style>
       
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center space-x-4">
-          <Button variant="outline" onClick={() => navigate('/dashboard')} className="back-button">
+          <Button variant="outline" onClick={() => navigate(getBackDestination())} className="back-button">
             <ArrowLeft className="h-4 w-4 mr-2 back-icon" />
-            Back
+            {getBackButtonText()}
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">{result.filename}</h1>
+            <div className="flex items-center space-x-2 mb-1">
+              <h1 className="text-3xl font-bold">{result.filename}</h1>
+              {jobId.startsWith('stream-event-') && (
+                <Badge variant="outline" className="text-sm">
+                  Live Stream Event
+                </Badge>
+              )}
+            </div>
             <p className="text-muted-foreground">
               Analyzed on {format(new Date(result.timestamp), 'PPpp')}
+              {jobId.startsWith('stream-event-') && result.stream_metadata && (
+                <span> • Stream: {result.stream_metadata.stream_name}</span>
+              )}
             </p>
           </div>
         </div>
@@ -384,9 +605,9 @@ const ResultsViewer = () => {
             <Download className="h-4 w-4 mr-2" />
             Download Report
           </Button>
-          <Button variant="outline" className="action-button">
+          <Button variant="outline" onClick={shareResults} className="action-button">
             <Share2 className="h-4 w-4 mr-2" />
-            Share
+            Share Results
           </Button>
         </div>
       </div>
@@ -456,28 +677,76 @@ const ResultsViewer = () => {
                 <Play className="h-5 w-5 mr-2" />
                 Video Playback
               </CardTitle>
+              <CardDescription>
+                {videoUrl ? (
+                  <div>
+                    <div>Click on segments below to jump to specific times</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Video URL: <code>{videoUrl}</code>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="ml-2 h-6 px-2 text-xs"
+                        onClick={() => testVideoUrl(videoUrl)}
+                      >
+                        Test URL
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  'Video playback not available'
+                )}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="aspect-video bg-black rounded-lg overflow-hidden">
-                {result.thumbnail ? (
-                  <ReactPlayer
-                    ref={setPlayerRef}
-                    url={result.video_path}
-                    width="100%"
-                    height="100%"
-                    controls={true}
-                    playing={playing}
-                    onPlay={() => setPlaying(true)}
-                    onPause={() => setPlaying(false)}
-                    onProgress={(state) => setCurrentTime(state.playedSeconds)}
-                  />
+              <div className="aspect-video">
+                {videoUrl ? (
+                  <div className="video-container w-full h-full">
+                    {videoLoading && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 z-10">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                        <span className="ml-2 text-white">Loading video...</span>
+                      </div>
+                    )}
+                    <video
+                      ref={videoRef}
+                      className="video-element"
+                      controls
+                      onLoadStart={handleVideoLoadStart}
+                      onCanPlay={handleVideoCanPlay}
+                      onError={handleVideoError}
+                      onTimeUpdate={handleVideoTimeUpdate}
+                      onPlay={() => setPlaying(true)}
+                      onPause={() => setPlaying(false)}
+                      crossOrigin="anonymous"
+                      preload="metadata"
+                    >
+                      <source src={videoUrl} type="video/mp4" />
+                      <source src={videoUrl} type="video/avi" />
+                      <source src={videoUrl} type="video/quicktime" />
+                      <source src={videoUrl} type="video/x-msvideo" />
+                      Your browser does not support the video tag.
+                    </video>
+                  </div>
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center">
+                  <div className="w-full h-full flex items-center justify-center video-fallback">
                     <div className="text-center">
                       <FileVideo className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                      <p className="text-muted-foreground">
+                      <p className="text-muted-foreground mb-2">
                         Video playback not available
                       </p>
+                      <p className="text-sm text-muted-foreground">
+                        The video file cannot be accessed for playback
+                      </p>
+                      {result.thumbnail && (
+                        <div className="mt-4">
+                          <img 
+                            src={result.thumbnail} 
+                            alt="Video thumbnail"
+                            className="mx-auto rounded border max-w-48"
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -581,21 +850,27 @@ const ResultsViewer = () => {
             <CardContent className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Duration:</span>
-                <span className="font-medium">{result.metadata?.duration_formatted}</span>
+                <span className="font-medium">{result.metadata?.duration_formatted || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Resolution:</span>
                 <span className="font-medium">
-                  {result.metadata?.width}x{result.metadata?.height}
+                  {result.metadata?.width && result.metadata?.height 
+                    ? `${result.metadata.width}x${result.metadata.height}` 
+                    : 'N/A'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Frame Rate:</span>
-                <span className="font-medium">{result.metadata?.fps?.toFixed(1)} fps</span>
+                <span className="font-medium">
+                  {result.metadata?.fps ? `${result.metadata.fps.toFixed(1)} fps` : 'N/A'}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Total Frames:</span>
-                <span className="font-medium">{result.metadata?.frame_count?.toLocaleString()}</span>
+                <span className="font-medium">
+                  {result.metadata?.frame_count ? result.metadata.frame_count.toLocaleString() : 'N/A'}
+                </span>
               </div>
             </CardContent>
           </Card>
@@ -611,15 +886,15 @@ const ResultsViewer = () => {
             <CardContent className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Architecture:</span>
-                <span className="font-medium">{result.model_info?.architecture}</span>
+                <span className="font-medium">{result.model_info?.architecture || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Input Frames:</span>
-                <span className="font-medium">{result.model_info?.input_frames}</span>
+                <span className="font-medium">{result.model_info?.input_frames || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Resolution:</span>
-                <span className="font-medium">{result.model_info?.input_resolution}</span>
+                <span className="font-medium">{result.model_info?.input_resolution || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Motion Enhancement:</span>
@@ -642,7 +917,9 @@ const ResultsViewer = () => {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Inference Time:</span>
                 <span className="font-medium">
-                  {result.overall_result?.inference_time?.toFixed(3)}s
+                  {result.overall_result?.inference_time 
+                    ? `${result.overall_result.inference_time.toFixed(3)}s`
+                    : 'N/A'}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -686,6 +963,14 @@ const ResultsViewer = () => {
               >
                 <Upload className="h-4 w-4 mr-2 action-icon" />
                 Analyze Another Video
+              </Button>
+              <Button 
+                variant="outline" 
+                className="w-full justify-start quick-action"
+                onClick={() => copyToClipboard(window.location.href)}
+              >
+                <Share2 className="h-4 w-4 mr-2 action-icon" />
+                Copy Results Link
               </Button>
             </CardContent>
           </Card>

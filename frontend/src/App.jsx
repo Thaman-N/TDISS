@@ -46,6 +46,8 @@ function AppContent() {
           <Route path="/upload" element={<UploadInterface />} />
           <Route path="/dashboard" element={<ProcessingDashboard />} />
           <Route path="/results/:jobId" element={<ResultsViewer />} />
+          {/* NEW: Add this line for stream events */}
+          <Route path="/results/stream-event-:eventId" element={<ResultsViewer />} />
           <Route path="/live-streams" element={<LiveStreamDashboard />} />
           <Route path="/stream-fullscreen/:streamId" element={<StreamFullScreen />} />
         </Routes>

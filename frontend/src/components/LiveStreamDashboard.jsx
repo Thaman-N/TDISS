@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import ReactPlayer from 'react-player'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -56,7 +58,9 @@ import {
   BarChart3,
   FileVideo,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Copy,
+  Brain
 } from 'lucide-react'
   // Helper function for relative time
   const getRelativeTime = (date) => {
@@ -88,6 +92,7 @@ import {
 
 const LiveStreamDashboard = () => {
   const { isConnected: wsConnected, registerJobUpdateCallback } = useWebSocket()
+  const [activeTab, setActiveTab] = useState('streams')
   const [streams, setStreams] = useState([])
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -844,85 +849,224 @@ const LiveStreamDashboard = () => {
       <Dialog open={eventDialogOpen} onOpenChange={setEventDialogOpen}>
         <DialogContent className="max-w-4xl bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/95">
           <DialogHeader>
-            <DialogTitle>Violence Event Details</DialogTitle>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Violence Event Details</span>
+              <div className="flex items-center space-x-2">
+                <Badge variant="destructive" className="text-xs">
+                  Live Stream Event
+                </Badge>
+                <Badge variant="outline" className={`text-xs ${getConfidenceColor(selectedEvent.confidence)}`}>
+                  {(selectedEvent.confidence * 100).toFixed(1)}%
+                </Badge>
+              </div>
+            </DialogTitle>
             <DialogDescription>
-              Event from {formatDate(selectedEvent.timestamp)}
+              Event from {formatDate(selectedEvent.timestamp)} â€¢ Stream: {selectedEvent.filename}
             </DialogDescription>
           </DialogHeader>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Enhanced Video Section */}
             <div className="space-y-4">
+              {/* Thumbnail */}
               {selectedEvent.thumbnail_path && (
-                <div className="aspect-video bg-black rounded-lg overflow-hidden">
+                <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
                   <img 
                     src={selectedEvent.thumbnail_path} 
                     alt="Event frame"
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity"
+                    onClick={() => {
+                      // Optional: click to view in full ResultsViewer
+                      setEventDialogOpen(false)
+                      navigate(`/results/stream-event-${selectedEvent.id}`)
+                    }}
                   />
+                  <div className="absolute top-2 left-2 bg-red-500 text-white px-2 py-1 rounded text-xs font-semibold">
+                    INCIDENT DETECTED
+                  </div>
+                  <div className="absolute bottom-2 right-2 bg-black/70 text-white px-2 py-1 rounded text-xs">
+                    Click for Full Analysis
+                  </div>
                 </div>
               )}
               
+              {/* Enhanced Video Player */}
               {selectedEvent.clip_path && (
-                <div className="aspect-video bg-black rounded-lg overflow-hidden">
-                  <video 
-                    controls 
-                    className="w-full h-full"
-                    src={selectedEvent.clip_path}
-                  />
+                <div className="space-y-2">
+                  <h4 className="font-medium flex items-center">
+                    <PlayCircle className="h-4 w-4 mr-1" />
+                    Event Clip ({selectedEvent.duration?.toFixed(1)}s)
+                  </h4>
+                  <div className="aspect-video bg-black rounded-lg overflow-hidden">
+                    <ReactPlayer
+                      url={selectedEvent.clip_path}
+                      width="100%"
+                      height="100%"
+                      controls={true}
+                      playing={false}
+                      loop={true}
+                      config={{
+                        file: {
+                          attributes: {
+                            crossOrigin: 'anonymous'
+                          }
+                        }
+                      }}
+                      onError={(error) => {
+                        console.error('Event clip playback error:', error)
+                        toast.error('Clip playback failed')
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              
+              {/* No clip fallback */}
+              {!selectedEvent.clip_path && !selectedEvent.thumbnail_path && (
+                <div className="aspect-video bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-center">
+                  <div className="text-center">
+                    <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground">No media available for this event</p>
+                  </div>
                 </div>
               )}
             </div>
             
+            {/* Enhanced Metadata Section */}
             <div className="space-y-4">
+              {/* Quick Stats */}
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Confidence</Label>
-                  <div className={`text-2xl font-bold ${getConfidenceColor(selectedEvent.confidence)}`}>
-                    {(selectedEvent.confidence * 100).toFixed(1)}%
+                <Card className="p-3">
+                  <div className="text-center">
+                    <div className={`text-2xl font-bold ${getConfidenceColor(selectedEvent.confidence)}`}>
+                      {(selectedEvent.confidence * 100).toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-muted-foreground">Confidence</div>
                   </div>
-                </div>
-                <div>
-                  <Label>Duration</Label>
-                  <div className="text-2xl font-bold">
-                    {selectedEvent.duration?.toFixed(1)}s
+                </Card>
+                <Card className="p-3">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-red-600">
+                      {selectedEvent.duration?.toFixed(1)}s
+                    </div>
+                    <div className="text-xs text-muted-foreground">Duration</div>
                   </div>
-                </div>
+                </Card>
               </div>
               
-              <div className="space-y-2">
-                <Label>Stream Information</Label>
-                <div className="p-3 bg-muted rounded-lg">
-                  <div className="text-sm space-y-1">
-                    <div><strong>Name:</strong> {selectedEvent.filename}</div>
-                    <div><strong>Source ID:</strong> {selectedEvent.source_id}</div>
-                    <div><strong>Type:</strong> {selectedEvent.source_type}</div>
+              {/* Stream Information */}
+              <Card className="p-4">
+                <h4 className="font-medium mb-3 flex items-center">
+                  <Camera className="h-4 w-4 mr-1" />
+                  Stream Information
+                </h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Stream:</span>
+                    <span className="font-medium">{selectedEvent.filename}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Source ID:</span>
+                    <span className="font-medium">{selectedEvent.source_id}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Type:</span>
+                    <span className="font-medium">{selectedEvent.source_type}</span>
                   </div>
                 </div>
-              </div>
+              </Card>
               
-              <div className="space-y-2">
-                <Label>Timing</Label>
-                <div className="p-3 bg-muted rounded-lg">
-                  <div className="text-sm space-y-1">
-                    <div><strong>Detected:</strong> {formatDate(selectedEvent.timestamp)}</div>
-                    <div><strong>Start:</strong> {selectedEvent.start_time?.toFixed(1)}s</div>
-                    <div><strong>End:</strong> {selectedEvent.end_time?.toFixed(1)}s</div>
+              {/* Timing Information */}
+              <Card className="p-4">
+                <h4 className="font-medium mb-3 flex items-center">
+                  <Clock className="h-4 w-4 mr-1" />
+                  Timing Details
+                </h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Detected:</span>
+                    <span className="font-medium">{formatDate(selectedEvent.timestamp)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Start:</span>
+                    <span className="font-medium">{selectedEvent.start_time?.toFixed(1)}s</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">End:</span>
+                    <span className="font-medium">{selectedEvent.end_time?.toFixed(1)}s</span>
                   </div>
                 </div>
-              </div>
+              </Card>
+
+              {/* AI Analysis Info */}
+              <Card className="p-4">
+                <h4 className="font-medium mb-3 flex items-center">
+                  <Brain className="h-4 w-4 mr-1" />
+                  Analysis Details
+                </h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Model:</span>
+                    <span className="font-medium">X3D-S Live Stream</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Detection Type:</span>
+                    <span className="font-medium">Real-time Violence Detection</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Processing:</span>
+                    <span className="font-medium">16-frame temporal analysis</span>
+                  </div>
+                </div>
+              </Card>
             </div>
           </div>
           
-          <DialogFooter>
-            {selectedEvent.clip_path && (
-              <Button onClick={() => downloadEventClip(selectedEvent)}>
-                <Download className="h-4 w-4 mr-2" />
-                Download Clip
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            {/* Primary Actions */}
+            <div className="flex gap-2 flex-1">
+              {/* New: View Full Analysis Button - Most Important */}
+              <Button 
+                onClick={() => {
+                  setEventDialogOpen(false)
+                  navigate(`/results/stream-event-${selectedEvent.id}`)
+                }}
+                className="flex-1 sm:flex-none"
+              >
+                <Eye className="h-4 w-4 mr-2" />
+                Full Analysis
               </Button>
-            )}
-            <Button variant="outline" onClick={() => setEventDialogOpen(false)}>
-              Close
-            </Button>
+              
+              {selectedEvent.clip_path && (
+                <Button 
+                  variant="outline"
+                  onClick={() => downloadEventClip(selectedEvent)} 
+                  className="flex-1 sm:flex-none"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Download Clip
+                </Button>
+              )}
+            </div>
+            
+            {/* Secondary Actions */}
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(`Event ID: ${selectedEvent.id}`)
+                  toast.success('Event ID copied')
+                }}
+              >
+                <Copy className="h-4 w-4 mr-1" />
+                Copy ID
+              </Button>
+              
+              <Button variant="outline" onClick={() => setEventDialogOpen(false)}>
+                Close
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1183,7 +1327,7 @@ const LiveStreamDashboard = () => {
       </div>
 
       {/* Main Content Tabs */}
-      <Tabs defaultValue="streams" className="space-y-6">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">        
         <div className="flex items-center justify-between">
           <TabsList>
             <TabsTrigger value="streams">Live Streams</TabsTrigger>
@@ -1258,50 +1402,99 @@ const LiveStreamDashboard = () => {
                 
                 <div className="space-y-2">
                   <Label htmlFor="dateRange">Time Range</Label>
-                  <select
-                    id="dateRange"
-                    className="w-full p-2 border rounded-md bg-background"
-                    value={eventFilter.dateRange}
-                    onChange={(e) => setEventFilter(prev => ({ ...prev, dateRange: e.target.value }))}
-                  >
-                    <option value="1h">Last Hour</option>
-                    <option value="24h">Last 24 Hours</option>
-                    <option value="7d">Last 7 Days</option>
-                    <option value="30d">Last 30 Days</option>
-                    <option value="all">All Time</option>
-                  </select>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        className="w-full justify-between"
+                      >
+                        {eventFilter.dateRange === '1h' ? 'Last Hour' : 
+                         eventFilter.dateRange === '24h' ? 'Last 24 Hours' : 
+                         eventFilter.dateRange === '7d' ? 'Last 7 Days' : 
+                         eventFilter.dateRange === '30d' ? 'Last 30 Days' : 'All Time'}
+                        <ChevronDown className="h-4 w-4 ml-2 opacity-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center" className="bg-background/99 backdrop-blur supports-[backdrop-filter]:bg-background/99 w-full">
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, dateRange: '1h' }))}>
+                        Last Hour
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, dateRange: '24h' }))}>
+                        Last 24 Hours
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, dateRange: '7d' }))}>
+                        Last 7 Days
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, dateRange: '30d' }))}>
+                        Last 30 Days
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, dateRange: 'all' }))}>
+                        All Time
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
                 
                 <div className="space-y-2">
                   <Label htmlFor="streamFilter">Stream</Label>
-                  <select
-                    id="streamFilter"
-                    className="w-full p-2 border rounded-md bg-background"
-                    value={eventFilter.streamId}
-                    onChange={(e) => setEventFilter(prev => ({ ...prev, streamId: e.target.value }))}
-                  >
-                    <option value="all">All Streams</option>
-                    {streams.map(stream => (
-                      <option key={stream.id} value={stream.id.toString()}>
-                        {stream.name}
-                      </option>
-                    ))}
-                  </select>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        className="w-full justify-between"
+                      >
+                        {eventFilter.streamId === 'all' 
+                          ? 'All Streams' 
+                          : streams.find(s => s.id.toString() === eventFilter.streamId)?.name || 'Select Stream'}
+                        <ChevronDown className="h-4 w-4 ml-2 opacity-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center" className="bg-background/99 backdrop-blur supports-[backdrop-filter]:bg-background/99 w-full">
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, streamId: 'all' }))}>
+                        All Streams
+                      </DropdownMenuItem>
+                      {streams.map(stream => (
+                        <DropdownMenuItem 
+                          key={stream.id} 
+                          onClick={() => setEventFilter(prev => ({ ...prev, streamId: stream.id.toString() }))}
+                        >
+                          {stream.name}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
                 
                 <div className="space-y-2">
                   <Label htmlFor="confidence">Min Confidence</Label>
-                  <select
-                    id="confidence"
-                    className="w-full p-2 border rounded-md bg-background"
-                    value={eventFilter.minConfidence}
-                    onChange={(e) => setEventFilter(prev => ({ ...prev, minConfidence: parseFloat(e.target.value) }))}
-                  >
-                    <option value="0">Any</option>
-                    <option value="0.7">70%+</option>
-                    <option value="0.8">80%+</option>
-                    <option value="0.9">90%+</option>
-                  </select>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        className="w-full justify-between"
+                      >
+                        {eventFilter.minConfidence === 0 ? 'Any' : 
+                         eventFilter.minConfidence === 0.7 ? '70%+' : 
+                         eventFilter.minConfidence === 0.8 ? '80%+' : 
+                         eventFilter.minConfidence === 0.9 ? '90%+' : `${eventFilter.minConfidence * 100}%+`}
+                        <ChevronDown className="h-4 w-4 ml-2 opacity-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center" className="bg-background/99 backdrop-blur supports-[backdrop-filter]:bg-background/99 w-full">
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, minConfidence: 0 }))}>
+                        Any
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, minConfidence: 0.7 }))}>
+                        70%+
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, minConfidence: 0.8 }))}>
+                        80%+
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEventFilter(prev => ({ ...prev, minConfidence: 0.9 }))}>
+                        90%+
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             </CardContent>

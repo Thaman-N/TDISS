@@ -1,4 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -534,7 +535,7 @@ UPLOAD_FOLDER = "uploads"
 RESULTS_FOLDER = "results"
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv'}
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB
-MODEL_PATH = r"stable_best_model.pth"
+MODEL_PATH = r'trainingpipeline\attention_checkpoints\stable_best_model.pth'
 DETECTION_THRESHOLD = 0.6
 
 # Cleanup and resource management configuration
@@ -881,36 +882,63 @@ class RTSPStreamProcessor:
             except Exception as e:
                 print(f"Error releasing capture for stream {self.stream_id}: {e}")
 
-        # Wait for threads to finish with timeout
+        # Set threads to None to avoid joining in signal handlers
         threads_to_join = []
+        capture_alive = False
+        process_alive = False
+        
         if self.capture_thread and self.capture_thread.is_alive():
+            capture_alive = True
             threads_to_join.append(("capture", self.capture_thread))
+        
         if self.process_thread and self.process_thread.is_alive():
+            process_alive = True
             threads_to_join.append(("process", self.process_thread))
         
-        for thread_name, thread in threads_to_join:
-            try:
-                thread.join(timeout=2.0)
-                if thread.is_alive():
-                    print(f"Warning: {thread_name} thread for stream {self.stream_id} did not stop gracefully")
-            except Exception as e:
-                print(f"Error joining {thread_name} thread for stream {self.stream_id}: {e}")
-
-        # Clear buffers safely
-        try:
-            # Clear raw frame queue
-            while not self.raw_frame_queue.empty():
+        # IMPORTANT: Don't join threads if we're in a global shutdown
+        if not global_shutdown_event.is_set() and not shutdown_in_progress:
+            for thread_name, thread in threads_to_join:
                 try:
-                    self.raw_frame_queue.get_nowait()
-                except:
-                    break
+                    # Use a shorter timeout to avoid blocking
+                    thread.join(timeout=1.0)
+                    if thread.is_alive():
+                        print(f"Warning: {thread_name} thread for stream {self.stream_id} did not stop gracefully")
+                except Exception as e:
+                    print(f"Error joining {thread_name} thread for stream {self.stream_id}: {e}")
+        else:
+            print(f"Skipping thread join for stream {self.stream_id} during shutdown")
+
+        # Only report on thread status if we're not in shutdown
+        if not global_shutdown_event.is_set() and not shutdown_in_progress:
+            if capture_alive and self.capture_thread and self.capture_thread.is_alive():
+                print(f"Note: Capture thread for stream {self.stream_id} still running")
+            if process_alive and self.process_thread and self.process_thread.is_alive():
+                print(f"Note: Process thread for stream {self.stream_id} still running")
+
+        # Clear buffers safely - don't block
+        try:
+            # Clear raw frame queue without blocking
+            try:
+                while not self.raw_frame_queue.empty():
+                    try:
+                        self.raw_frame_queue.get_nowait()
+                    except:
+                        break
+            except:
+                pass
             
             # Clear RGB buffer
-            self.rgb_frame_buffer.clear()
+            try:
+                self.rgb_frame_buffer.clear()
+            except:
+                pass
             
             # Clear display frame
-            with self._lock:
-                self.last_display_frame = None
+            try:
+                with self._lock:
+                    self.last_display_frame = None
+            except:
+                pass
                 
         except Exception as e:
             print(f"Error clearing buffers for stream {self.stream_id}: {e}")
@@ -921,6 +949,11 @@ class RTSPStreamProcessor:
                 del active_streams[self.stream_id]
         except Exception as e:
             print(f"Error removing stream {self.stream_id} from active streams: {e}")
+
+        # Ensure we're not setting threads to None during shutdown
+        if not global_shutdown_event.is_set() and not shutdown_in_progress:
+            self.capture_thread = None
+            self.process_thread = None
 
         print(f"Stream {self.stream_id} stopped successfully")
 
@@ -1636,7 +1669,7 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
             'metadata': metadata,
             'thumbnail': active_jobs[job_id]['thumbnail'],
             'model_info': {
-                'architecture': 'X3D-S',
+                'architecture': 'X3D-M',
                 'motion_enhancement': use_motion,
                 'input_frames': 16,
                 'input_resolution': '224x224'
@@ -1678,7 +1711,7 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
             'violence_duration': result['violence_duration'],
             'violence_percentage': result['violence_percentage'],
             'overall_confidence': float(confidence),
-            'model_type': 'X3D-S',
+            'model_type': 'X3D-M',
             'thumbnail': active_jobs[job_id]['thumbnail']
         }
 
@@ -1971,8 +2004,8 @@ async def get_result(job_id: str):
         raise HTTPException(status_code=500, detail=f"Error reading result: {str(e)}")
 
 @app.get("/api/results/{filename}")
-async def get_result_file(filename: str):
-    """Serve files from the results folder"""
+async def get_result_file(filename: str, request: Request):
+    """Serve files from the results folder - enhanced version with proper headers"""
     # Security check: prevent directory traversal
     if '..' in filename or '/' in filename or '\\' in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -1981,11 +2014,92 @@ async def get_result_file(filename: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(file_path)
+    # Get file stats for content-length and range support
+    stat_result = os.stat(file_path)
+    file_size = stat_result.st_size
+
+    # Determine content type
+    file_ext = os.path.splitext(file_path)[1].lower()
+    
+    content_type_map = {
+        '.mp4': 'video/mp4',
+        '.avi': 'video/x-msvideo', 
+        '.mov': 'video/quicktime',
+        '.mkv': 'video/x-matroska',
+        '.webm': 'video/webm',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.json': 'application/json'
+    }
+    
+    media_type = content_type_map.get(file_ext, 'application/octet-stream')
+    
+    # Handle range requests for video seeking
+    range_header = request.headers.get('range')
+    
+    if range_header and file_ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
+        # Parse range header
+        range_match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+            
+            # Ensure valid range
+            start = min(start, file_size - 1)
+            end = min(end, file_size - 1)
+            
+            if start <= end:
+                from fastapi.responses import Response
+                
+                def iterfile(file_path: str, start: int, end: int, chunk_size: int = 8192):
+                    with open(file_path, 'rb') as file:
+                        file.seek(start)
+                        remaining = end - start + 1
+                        while remaining:
+                            chunk = file.read(min(chunk_size, remaining))
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            yield chunk
+                
+                content_length = end - start + 1
+                headers = {
+                    'Accept-Ranges': 'bytes',
+                    'Content-Range': f'bytes {start}-{end}/{file_size}',
+                    'Content-Length': str(content_length),
+                    'Content-Type': media_type,
+                    'Cache-Control': 'no-cache',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Range'
+                }
+                
+                return StreamingResponse(
+                    iterfile(file_path, start, end),
+                    status_code=206,
+                    headers=headers,
+                    media_type=media_type  # or 'video/mp4' for video files
+                )
+    
+    # Regular file response
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Range, Content-Type",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS"
+    }
+    
+    return FileResponse(
+        file_path, 
+        media_type=media_type,
+        headers=headers
+    )
 
 @app.get("/api/results/clips/{filename}")
-async def get_clip_file(filename: str):
-    """Serve clip files from the clips folder"""
+async def get_clip_file(filename: str, request: Request):
+    """Serve clip files from the clips folder with range support"""
     # Security check
     if '..' in filename or '/' in filename or '\\' in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -1996,7 +2110,66 @@ async def get_clip_file(filename: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    return FileResponse(file_path)
+    # Get file stats
+    stat_result = os.stat(file_path)
+    file_size = stat_result.st_size
+
+    # Handle range requests
+    range_header = request.headers.get('range')
+    
+    if range_header:
+        # Parse range header
+        import re
+        range_match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+            
+            start = min(start, file_size - 1)
+            end = min(end, file_size - 1)
+            
+            if start <= end:
+                from fastapi.responses import Response
+                
+                def iterfile(file_path: str, start: int, end: int, chunk_size: int = 8192):
+                    with open(file_path, 'rb') as file:
+                        file.seek(start)
+                        remaining = end - start + 1
+                        while remaining:
+                            chunk = file.read(min(chunk_size, remaining))
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            yield chunk
+                
+                content_length = end - start + 1
+                headers = {
+                    'Accept-Ranges': 'bytes',
+                    'Content-Range': f'bytes {start}-{end}/{file_size}',
+                    'Content-Length': str(content_length),
+                    'Content-Type': 'video/mp4',
+                    'Cache-Control': 'no-cache',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Range'
+                }
+                
+                return StreamingResponse(
+                    iterfile(file_path, start, end),
+                    status_code=206,
+                    headers=headers,
+                    media_type=media_type  # or 'video/mp4' for video files
+                )
+
+    # Regular response
+    return FileResponse(
+        file_path, 
+        media_type='video/mp4',
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
 
 @app.get("/api/results/stream_thumbnails/{filename}")
 async def get_stream_thumbnail(filename: str):
@@ -2454,8 +2627,8 @@ async def delete_stream_event(event_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/results/stream_clips/{filename}")
-async def get_stream_clip(filename: str):
-    """Serve stream clip files"""
+async def get_stream_clip(filename: str, request: Request):
+    """Serve stream clip files with range support"""
     if '..' in filename or '/' in filename or '\\' in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
@@ -2465,7 +2638,313 @@ async def get_stream_clip(filename: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    return FileResponse(file_path)
+    # Get file stats
+    stat_result = os.stat(file_path)
+    file_size = stat_result.st_size
+
+    # Handle range requests
+    range_header = request.headers.get('range')
+    
+    if range_header:
+        # Parse range header
+        import re
+        range_match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+            
+            start = min(start, file_size - 1)
+            end = min(end, file_size - 1)
+            
+            if start <= end:
+                from fastapi.responses import Response
+                
+                def iterfile(file_path: str, start: int, end: int, chunk_size: int = 8192):
+                    with open(file_path, 'rb') as file:
+                        file.seek(start)
+                        remaining = end - start + 1
+                        while remaining:
+                            chunk = file.read(min(chunk_size, remaining))
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            yield chunk
+                
+                content_length = end - start + 1
+                headers = {
+                    'Accept-Ranges': 'bytes',
+                    'Content-Range': f'bytes {start}-{end}/{file_size}',
+                    'Content-Length': str(content_length),
+                    'Content-Type': 'video/mp4',
+                    'Cache-Control': 'no-cache',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Range'
+                }
+                
+                return StreamingResponse(
+                    iterfile(file_path, start, end),
+                    status_code=206,
+                    headers=headers,
+                    media_type=media_type  # or 'video/mp4' for video files
+                )
+
+    # Regular response
+    return FileResponse(
+        file_path, 
+        media_type='video/mp4',
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Range, Content-Type",
+            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS"
+        }
+    )
+
+@app.get("/api/uploads/{filename}")
+async def get_uploaded_file(filename: str, request: Request):
+    """Serve uploaded video files with proper range support"""
+    # Security check: prevent directory traversal
+    if '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Look for the file in uploads folder
+    file_path = None
+    
+    # Check if file exists directly
+    direct_path = os.path.join(UPLOAD_FOLDER, filename)
+    if os.path.exists(direct_path):
+        file_path = direct_path
+    else:
+        # Search for files that contain the filename (in case of UUID prefix)
+        try:
+            for file in os.listdir(UPLOAD_FOLDER):
+                if filename in file or file.endswith(filename):
+                    file_path = os.path.join(UPLOAD_FOLDER, file)
+                    break
+        except Exception as e:
+            print(f"Error searching for file {filename}: {e}")
+    
+    if not file_path or not os.path.exists(file_path):
+        print(f"Video file not found: {filename}")
+        print(f"Searched in: {UPLOAD_FOLDER}")
+        print(f"Direct path tried: {direct_path}")
+        try:
+            print(f"Available files: {os.listdir(UPLOAD_FOLDER)}")
+        except:
+            print("Could not list upload folder contents")
+        raise HTTPException(status_code=404, detail="Video file not found")
+
+    # Get file stats
+    stat_result = os.stat(file_path)
+    file_size = stat_result.st_size
+    
+    print(f"Serving video file: {file_path} (size: {file_size} bytes)")
+
+    # Determine content type based on file extension
+    file_ext = os.path.splitext(file_path)[1].lower()
+    content_type_map = {
+        '.mp4': 'video/mp4',
+        '.avi': 'video/x-msvideo', 
+        '.mov': 'video/quicktime',
+        '.mkv': 'video/x-matroska',
+        '.webm': 'video/webm'
+    }
+    
+    media_type = content_type_map.get(file_ext, 'video/mp4')
+    print(f"Content type: {media_type}")
+    
+    # Handle range requests for video seeking
+    range_header = request.headers.get('range')
+    print(f"Range header: {range_header}")
+    
+    if range_header:
+        # Parse range header (e.g., "bytes=0-1023")
+        import re
+        range_match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+            
+            # Ensure valid range
+            start = min(start, file_size - 1)
+            end = min(end, file_size - 1)
+            
+            print(f"Range request: {start}-{end} of {file_size}")
+            
+            if start <= end:
+                from fastapi.responses import Response
+                
+                def iterfile(file_path: str, start: int, end: int, chunk_size: int = 8192):
+                    """Generator function to stream file content in chunks"""
+                    with open(file_path, 'rb') as file:
+                        file.seek(start)
+                        remaining = end - start + 1
+                        while remaining:
+                            chunk = file.read(min(chunk_size, remaining))
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            yield chunk
+                
+                content_length = end - start + 1
+                headers = {
+                    'Accept-Ranges': 'bytes',
+                    'Content-Range': f'bytes {start}-{end}/{file_size}',
+                    'Content-Length': str(content_length),
+                    'Content-Type': media_type,
+                    'Cache-Control': 'no-cache',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Range, Content-Type',
+                    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS'
+                }
+                
+                return StreamingResponse(
+                    iterfile(file_path, start, end),
+                    status_code=206,
+                    headers=headers,
+                    media_type=media_type  # or 'video/mp4' for video files
+                )
+    
+    # Regular file response (no range request)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Range, Content-Type",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS"
+    }
+    
+    print(f"Serving full file with headers: {headers}")
+    
+    return FileResponse(
+        file_path, 
+        media_type=media_type,
+        headers=headers
+    )
+
+@app.get("/api/stream-event/{event_id}")
+async def get_stream_event_result(event_id: int):
+    """Get stream event data formatted for ResultsViewer compatibility"""
+    try:
+        if not event_db:
+            raise HTTPException(status_code=500, detail="Database not initialized")
+            
+        conn = sqlite3.connect(event_db.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM violence_events WHERE id = ? AND source_type = "stream"', (event_id,))
+        event = cursor.fetchone()
+        conn.close()
+        
+        if not event:
+            raise HTTPException(status_code=404, detail="Stream event not found")
+        
+        # Parse metadata if it exists
+        metadata_dict = {}
+        if event[11]:  # metadata column
+            try:
+                metadata_dict = json.loads(event[11])
+            except:
+                metadata_dict = {}
+        
+        # Get stream information
+        stream_info = None
+        if stream_db:
+            streams = stream_db.get_streams()
+            stream_info = next((s for s in streams if str(s['id']) == event[3]), None)
+        
+        stream_name = stream_info['name'] if stream_info else event[4]
+        
+        # Format duration
+        duration = event[7]  # duration column
+        duration_formatted = f"{int(duration//60)}:{int(duration%60):02d}"
+        
+        # Create segments (live stream events typically have one segment)
+        segments = [{
+            'start': event[5],  # start_time
+            'end': event[6],    # end_time
+            'confidence': float(event[8]),  # confidence
+            'start_formatted': f"{int(event[5]//60)}:{int(event[5]%60):02d}",
+            'end_formatted': f"{int(event[6]//60)}:{int(event[6]%60):02d}"
+        }]
+        
+        # Format result to match ResultsViewer expectations
+        result = {
+            'job_id': f"stream_event_{event[0]}",
+            'filename': stream_name,
+            'timestamp': event[1],  # timestamp
+            'has_violence': True,   # Stream events are always violence detections
+            'video_path': event[10] if event[10] else None,  # clip_path
+            'thumbnail': event[9] if event[9] else None,     # thumbnail_path
+            
+            # Overall result info
+            'overall_result': {
+                'is_fight': True,
+                'confidence': float(event[8]),
+                'inference_time': metadata_dict.get('detection_interval', 3.0)
+            },
+            
+            # Segments data
+            'segments': segments,
+            'violence_duration': duration,
+            'violence_percentage': 100.0,  # Assume entire clip is violent
+            
+            # Metadata for video player
+            'metadata': {
+                'duration': duration,
+                'duration_formatted': duration_formatted,
+                'width': 640,  # Default values since we don't store these for streams
+                'height': 480,
+                'fps': 4.0,    # Typical for event clips
+                'frame_count': int(duration * 4),
+                'source_type': 'live_stream'
+            },
+            
+            # Model information
+            'model_info': {
+                'architecture': 'X3D-M (Live Stream)',
+                'motion_enhancement': metadata_dict.get('motion_enhancement', True),
+                'input_frames': metadata_dict.get('temporal_length', 16),
+                'input_resolution': f"{metadata_dict.get('model_input_size', [224, 224])[0]}x{metadata_dict.get('model_input_size', [224, 224])[1]}",
+                'source_stream': stream_name,
+                'stream_id': event[3]
+            },
+            
+            # Stream-specific metadata
+            'stream_metadata': {
+                'stream_id': event[3],
+                'stream_name': stream_name,
+                'rtsp_url': stream_info['rtsp_url'] if stream_info else 'N/A',
+                'detection_type': 'real_time_monitoring',
+                'event_id': event[0],
+                'pipeline_version': metadata_dict.get('pipeline_version', 'stream_v1')
+            }
+        }
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting stream event {event_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.options("/api/uploads/{filename}")
+@app.options("/api/results/{filename}")  
+@app.options("/api/results/clips/{filename}")
+@app.options("/api/results/stream_clips/{filename}")
+async def handle_video_options():
+    """Handle CORS preflight requests for video endpoints"""
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+            "Access-Control-Allow-Headers": "Range, Content-Type, Authorization",
+            "Access-Control-Max-Age": "3600"
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn
