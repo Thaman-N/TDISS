@@ -7,7 +7,7 @@ A web-based dashboard for analyzing videos and detecting aggression using deep l
 
 ## Features
 
-- **Real-time Processing**: Upload videos or provide file paths for analysis
+- **Real-time Processing**: Use RTSP to add camera live streams or simply upload videos
 - **Live Job Tracking**: Monitor processing progress with real-time updates
 - **Detailed Results**: View violence timeline, confidence scores, and video metadata
 - **Search & Filter**: Browse history with search and filter capabilities
@@ -55,7 +55,9 @@ npm run dev
 ```
 
 6. **Open your browser**
-Navigate to http://localhost:5173
+```bash
+#Navigate to http://localhost:5173
+```
 
 ## Using the Training Pipeline
 ```bash
@@ -74,7 +76,6 @@ backend
 ├── torch_detection.py
 ├── stable_best_model.pth
 └── trainingpipeline
-    ├── constraints.txt
     ├── train_x3d_violence.py
     ├── x3d_dataset.py
     ├── x3d_model.py
