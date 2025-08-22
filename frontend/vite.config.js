@@ -23,5 +23,29 @@ export default defineConfig({
         changeOrigin: true,
       }
     }
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./tests/setup.jsx'],
+    globals: true,
+    css: true,
+    // Test file patterns
+    include: [
+      'tests/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}',
+      'src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'
+    ],
+    // Coverage configuration
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+      exclude: [
+        'node_modules/',
+        'tests/setup.jsx',
+        'tests/test-utils.jsx',
+        '**/*.config.js',
+        'dist/',
+        'coverage/'
+      ]
+    }
   }
 })

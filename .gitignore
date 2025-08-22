@@ -11,13 +11,14 @@ node_modules/
 dist/
 *.log
 
-checkpoints/
-attention_checkpoints/
+*checkpoints/
 uploads/
 results/
 *.db
 .benchmarks/
 .pytest_cache/
+tp*/
+*model*.pth
 
 # System files
 .DS_Store
