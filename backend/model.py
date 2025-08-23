@@ -279,7 +279,7 @@ class OptimizedX3DViolenceDetector(nn.Module):
     
     def _get_feature_dim(self):
         """Determine feature dimension"""
-        dummy_input = torch.zeros((1, 3, 16, 224, 224), device=self.device, dtype=torch.float32)
+        dummy_input = torch.zeros((1, 3, 16, 336, 336), device=self.device, dtype=torch.float32)
         
         with torch.no_grad():
             features = self._extract_x3d_features(dummy_input)

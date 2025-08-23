@@ -767,7 +767,7 @@ class RTSPStreamProcessor:
         self.frame_skip_counter = 0
 
         # Model input requirements (from torch_detection.py)
-        self.model_input_size = (224, 224)  # INPUT_SIZE = 224
+        self.model_input_size = (336, 336)  # INPUT_SIZE = 336
         self.model_temporal_length = 16  # NUM_FRAMES = 16
 
         # Thread synchronization
@@ -1188,7 +1188,7 @@ class RTSPStreamProcessor:
                     
                     # Create a short video clip from recent frames
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    out = cv2.VideoWriter(clip_path, fourcc, 4.0, (224, 224))  # 4 FPS, model input size
+                    out = cv2.VideoWriter(clip_path, fourcc, 4.0, (336, 336))  # 4 FPS, model input size
                     
                     # Use last 8 frames from buffer (2 seconds at 4 FPS)
                     recent_frames = list(self.rgb_frame_buffer)[-8:]

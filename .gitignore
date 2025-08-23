@@ -19,6 +19,8 @@ results/
 .pytest_cache/
 tp*/
 *model*.pth
+*.pt
+
 
 # System files
 .DS_Store

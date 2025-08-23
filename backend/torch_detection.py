@@ -10,7 +10,7 @@ from model import X3DViolenceDetector, create_model
 
 # Constants for X3D model - MATCH TRAINING SETTINGS
 NUM_FRAMES = 16       # X3D works with 16 frames
-INPUT_SIZE = 224      # X3D uses 224x224 input
+INPUT_SIZE = 336      # X3D uses 336x336 input (matching training)
 SAMPLING_RATE = 4     # Temporal sampling rate
 
 def load_violence_detection_model(model_path, device=None):
