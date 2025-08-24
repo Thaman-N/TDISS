@@ -1672,7 +1672,7 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
                 'architecture': 'X3D-M',
                 'motion_enhancement': use_motion,
                 'input_frames': 16,
-                'input_resolution': '224x224'
+                'input_resolution': '336x336'
             },
             'overall_result': {
                 'is_fight': is_fight,
@@ -2906,7 +2906,7 @@ async def get_stream_event_result(event_id: int):
                 'architecture': 'X3D-M (Live Stream)',
                 'motion_enhancement': metadata_dict.get('motion_enhancement', True),
                 'input_frames': metadata_dict.get('temporal_length', 16),
-                'input_resolution': f"{metadata_dict.get('model_input_size', [224, 224])[0]}x{metadata_dict.get('model_input_size', [224, 224])[1]}",
+                'input_resolution': f"{metadata_dict.get('model_input_size', [336, 336])[0]}x{metadata_dict.get('model_input_size', [336, 336])[1]}",
                 'source_stream': stream_name,
                 'stream_id': event[3]
             },

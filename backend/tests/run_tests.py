@@ -87,18 +87,54 @@ def run_tests_with_coverage():
 
 
 def run_quick_tests():
-    """Run a quick subset of tests for development"""
+    """Run a quick subset of tests for development - UPDATED for optimized architecture"""
     cmd = [
         sys.executable, "-m", "pytest",
+        # Database tests
         "test_database.py::TestEventDatabase::test_save_event",
-        "test_model.py::TestAttentionFusion::test_forward_pass",
+        
+        # Updated model tests (removed AttentionFusion, added new components)
+        "test_model.py::TestSE3D::test_forward_pass",
+        "test_model.py::TestOptimizedX3DViolenceDetector::test_model_initialization",
+        "test_model.py::TestSimpleConcatenation::test_concatenation_fusion",
+        
+        # Detection pipeline tests
         "test_detection.py::TestPreprocessFrames::test_preprocess_frames_rgb_only",
+        "test_detection.py::TestPredictViolence::test_predict_violence_non_violent",
+        "test_detection.py::TestExtractFrames::test_extract_frames_success",
+        
+        # API tests (if they exist)
         "test_api.py::TestAPIEndpoints::test_root_endpoint",
+        
+        # Utility tests (if they exist)
         "test_utils.py::TestSecureFilename::test_normal_filename",
+        
         "-v",
         "--tb=line"
     ]
-    return run_command(cmd, "Running quick test suite")
+    return run_command(cmd, "Running quick test suite (optimized architecture)")
+
+
+def run_model_tests_only():
+    """Run only model-related tests"""
+    cmd = [
+        sys.executable, "-m", "pytest",
+        "test_model.py",
+        "-v",
+        "--tb=short"
+    ]
+    return run_command(cmd, "Running model tests only")
+
+
+def run_detection_tests_only():
+    """Run only detection pipeline tests"""
+    cmd = [
+        sys.executable, "-m", "pytest",
+        "test_detection.py",
+        "-v",
+        "--tb=short"
+    ]
+    return run_command(cmd, "Running detection pipeline tests only")
 
 
 def run_parallel_tests():
@@ -134,17 +170,80 @@ def check_test_files():
         "test_requirements.txt"
     ]
     
+    existing_files = []
     missing_files = []
+    
     for file in test_files:
-        if not Path(file).exists():
+        if Path(file).exists():
+            existing_files.append(file)
+        else:
             missing_files.append(file)
     
+    print(f"✅ Found test files: {', '.join(existing_files)}")
+    
     if missing_files:
-        print(f"❌ Missing test files: {', '.join(missing_files)}")
+        print(f"⚠️  Missing optional test files: {', '.join(missing_files)}")
+        print("   (These will be skipped in test runs)")
+    
+    # Only require core test files
+    required_files = ["test_model.py", "test_detection.py"]
+    missing_required = [f for f in required_files if not Path(f).exists()]
+    
+    if missing_required:
+        print(f"❌ Missing required test files: {', '.join(missing_required)}")
         return False
     else:
-        print("✅ All test files found")
+        print("✅ All required test files found")
         return True
+
+
+def run_core_tests():
+    """Run only the core tests that should always exist"""
+    existing_test_files = []
+    
+    # Check which test files actually exist
+    test_files = ["test_model.py", "test_detection.py", "test_database.py", "test_api.py", "test_utils.py"]
+    for test_file in test_files:
+        if Path(test_file).exists():
+            existing_test_files.append(test_file)
+    
+    if not existing_test_files:
+        print("❌ No test files found!")
+        return False
+    
+    cmd = [
+        sys.executable, "-m", "pytest"
+    ] + existing_test_files + [
+        "-v",
+        "--tb=short"
+    ]
+    
+    return run_command(cmd, f"Running core tests: {', '.join(existing_test_files)}")
+
+
+def run_architecture_tests():
+    """Run tests specifically for the optimized architecture components"""
+    cmd = [
+        sys.executable, "-m", "pytest",
+        # SE3D attention tests
+        "test_model.py::TestSE3D",
+        
+        # Motion enhancement tests
+        "test_model.py::TestMotionEnhancementModule",
+        
+        # Optimized model tests
+        "test_model.py::TestOptimizedX3DViolenceDetector",
+        
+        # Simple concatenation tests
+        "test_model.py::TestSimpleConcatenation",
+        
+        # Detection pipeline with new architecture
+        "test_detection.py::TestIntegration",
+        
+        "-v",
+        "--tb=short"
+    ]
+    return run_command(cmd, "Running optimized architecture tests")
 
 
 def main():
@@ -160,6 +259,10 @@ def main():
             "all",
             "coverage",
             "quick",
+            "core",
+            "model",
+            "detection", 
+            "architecture",
             "parallel",
             "html",
             "check"
@@ -177,11 +280,14 @@ def main():
     
     print("Violence Detection Backend Test Runner")
     print("=====================================")
+    print("🔧 Updated for Optimized X3D Architecture")
+    print("")
     
     # Check if test files exist
     if not check_test_files():
-        print("\n❌ Some test files are missing. Please ensure all test files are present.")
-        return 1
+        if args.command not in ["check", "install"]:
+            print("\n❌ Required test files are missing. Please ensure test files are present.")
+            return 1
     
     # Install dependencies if needed
     if not args.no_install and args.command != "install" and args.command != "check":
@@ -213,6 +319,14 @@ def main():
         success = run_tests_with_coverage()
     elif args.command == "quick":
         success = run_quick_tests()
+    elif args.command == "core":
+        success = run_core_tests()
+    elif args.command == "model":
+        success = run_model_tests_only()
+    elif args.command == "detection":
+        success = run_detection_tests_only()
+    elif args.command == "architecture":
+        success = run_architecture_tests()
     elif args.command == "parallel":
         success = run_parallel_tests()
     elif args.command == "html":
@@ -222,9 +336,25 @@ def main():
     
     if success:
         print(f"\n🎉 {args.command.title()} completed successfully!")
+        
+        # Show helpful next steps
+        if args.command == "quick":
+            print("\n💡 Next steps:")
+            print("   • Run 'python run_tests.py all' for complete test suite")
+            print("   • Run 'python run_tests.py architecture' for optimized model tests")
+            print("   • Run 'python run_tests.py coverage' for coverage report")
+        
         return 0
     else:
         print(f"\n💥 {args.command.title()} failed!")
+        
+        # Show helpful debugging tips
+        if args.command == "quick":
+            print("\n🔍 Try these debugging steps:")
+            print("   • Run 'python run_tests.py check' to verify test files")
+            print("   • Run 'python run_tests.py core' to run only existing tests")
+            print("   • Check that test files match the updated architecture")
+        
         return 1
 
 

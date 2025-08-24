@@ -41,11 +41,11 @@ class TestExtractFrames:
         
         mock_video_capture.return_value = mock_cap
         
-        # Test frame extraction
+        # Test frame extraction (updated to match new INPUT_SIZE = 336)
         frames = extract_frames("dummy_video.mp4", num_frames=16)
         
         assert isinstance(frames, np.ndarray)
-        assert frames.shape == (16, 224, 224, 3)  # 16 frames, 224x224, RGB
+        assert frames.shape == (16, 336, 336, 3)  # Updated size
         assert frames.dtype == np.uint8
     
     @patch('cv2.VideoCapture')
@@ -78,7 +78,7 @@ class TestExtractFrames:
         frames = extract_frames("short_video.mp4", num_frames=16)
         
         # Should still return 16 frames (with repetition)
-        assert frames.shape == (16, 224, 224, 3)
+        assert frames.shape == (16, 336, 336, 3)  # Updated size
 
 
 class TestComputeOpticalFlow:
@@ -86,41 +86,41 @@ class TestComputeOpticalFlow:
     
     def test_optical_flow_computation(self):
         """Test optical flow computation with dummy frames"""
-        # Create dummy RGB frames
+        # Create dummy RGB frames (updated size)
         num_frames = 4
-        frames = np.random.randint(0, 255, (num_frames, 224, 224, 3), dtype=np.uint8)
+        frames = np.random.randint(0, 255, (num_frames, 336, 336, 3), dtype=np.uint8)
         
         with patch('cv2.calcOpticalFlowFarneback') as mock_flow:
             # Mock optical flow output
-            mock_flow_result = np.random.randn(224, 224, 2).astype(np.float32)
+            mock_flow_result = np.random.randn(336, 336, 2).astype(np.float32)
             mock_flow.return_value = mock_flow_result
             
             flow_frames = compute_optical_flow(frames)
             
-            assert flow_frames.shape == (num_frames, 224, 224, 3)
+            assert flow_frames.shape == (num_frames, 336, 336, 3)
             assert flow_frames.dtype == np.uint8
             assert mock_flow.call_count == num_frames - 1  # N-1 flows for N frames
     
     def test_optical_flow_error_handling(self):
         """Test optical flow computation with errors"""
-        frames = np.random.randint(0, 255, (3, 224, 224, 3), dtype=np.uint8)
+        frames = np.random.randint(0, 255, (3, 336, 336, 3), dtype=np.uint8)
         
         with patch('cv2.calcOpticalFlowFarneback', side_effect=Exception("Flow error")):
             # Should handle errors gracefully and return zero flows
             flow_frames = compute_optical_flow(frames)
             
-            assert flow_frames.shape == (3, 224, 224, 3)
+            assert flow_frames.shape == (3, 336, 336, 3)
             # Should return zero flows as fallback
             assert np.allclose(flow_frames, 0)
     
     def test_optical_flow_empty_frames(self):
         """Test optical flow with empty frame list"""
-        frames = np.array([]).reshape(0, 224, 224, 3)
+        frames = np.array([]).reshape(0, 336, 336, 3)
         
         flow_frames = compute_optical_flow(frames)
         
         # Should return properly shaped empty array
-        assert flow_frames.shape == (0, 224, 224, 3)
+        assert flow_frames.shape == (0, 336, 336, 3)
         assert flow_frames.dtype == np.uint8
 
 
@@ -129,12 +129,12 @@ class TestPreprocessFrames:
     
     def test_preprocess_frames_rgb_only(self):
         """Test preprocessing without optical flow"""
-        frames = np.random.randint(0, 255, (16, 224, 224, 3), dtype=np.uint8)
+        frames = np.random.randint(0, 255, (16, 336, 336, 3), dtype=np.uint8)
         
         data = preprocess_frames(frames, compute_flow=False)
         
         assert 'rgb' in data
-        assert data['rgb'].shape == (3, 16, 224, 224)  # [C, T, H, W]
+        assert data['rgb'].shape == (3, 16, 336, 336)  # [C, T, H, W]
         assert isinstance(data['rgb'], torch.Tensor)
         
         # Check normalization (should be around [-2, 2] range with ImageNet normalization)
@@ -143,24 +143,24 @@ class TestPreprocessFrames:
     
     def test_preprocess_frames_with_flow(self):
         """Test preprocessing with optical flow"""
-        frames = np.random.randint(0, 255, (16, 224, 224, 3), dtype=np.uint8)
+        frames = np.random.randint(0, 255, (16, 336, 336, 3), dtype=np.uint8)
         
         with patch('torch_detection.compute_optical_flow') as mock_flow:
             # Mock optical flow result
-            mock_flow.return_value = np.random.randint(0, 255, (16, 224, 224, 3), dtype=np.uint8)
+            mock_flow.return_value = np.random.randint(0, 255, (16, 336, 336, 3), dtype=np.uint8)
             
             data = preprocess_frames(frames, compute_flow=True)
             
             assert 'rgb' in data
             assert 'flow' in data
-            assert data['rgb'].shape == (3, 16, 224, 224)
-            assert data['flow'].shape == (3, 16, 224, 224)
+            assert data['rgb'].shape == (3, 16, 336, 336)
+            assert data['flow'].shape == (3, 16, 336, 336)
             assert isinstance(data['rgb'], torch.Tensor)
             assert isinstance(data['flow'], torch.Tensor)
     
     def test_preprocess_frames_flow_error(self):
         """Test preprocessing when optical flow computation fails"""
-        frames = np.random.randint(0, 255, (16, 224, 224, 3), dtype=np.uint8)
+        frames = np.random.randint(0, 255, (16, 336, 336, 3), dtype=np.uint8)
         
         with patch('torch_detection.compute_optical_flow', side_effect=Exception("Flow error")):
             data = preprocess_frames(frames, compute_flow=True)
@@ -198,8 +198,8 @@ class TestPredictViolence:
         mock_model = self.create_mock_model([2.0, -1.0])
         
         data = {
-            'rgb': torch.randn(1, 3, 16, 224, 224),
-            'flow': torch.randn(1, 3, 16, 224, 224)
+            'rgb': torch.randn(1, 3, 16, 336, 336),
+            'flow': torch.randn(1, 3, 16, 336, 336)
         }
         
         is_fight, confidence, inference_time = predict_violence(
@@ -220,7 +220,7 @@ class TestPredictViolence:
         # Logits favoring violence [NonFight_logit, Fight_logit]
         mock_model = self.create_mock_model([-1.0, 2.0])
         
-        data = {'rgb': torch.randn(1, 3, 16, 224, 224)}
+        data = {'rgb': torch.randn(1, 3, 16, 336, 336)}
         
         is_fight, confidence, inference_time = predict_violence(
             mock_model, data, threshold=0.5, device='cpu'
@@ -237,7 +237,7 @@ class TestPredictViolence:
         # Borderline case
         mock_model = self.create_mock_model([0.1, 0.2])
         
-        data = {'rgb': torch.randn(1, 3, 16, 224, 224)}
+        data = {'rgb': torch.randn(1, 3, 16, 336, 336)}
         
         # Test with low threshold
         is_fight_low, confidence, _ = predict_violence(
@@ -267,7 +267,7 @@ class TestPredictViolence:
         mock_model = self.create_mock_model([0.0, 1.0])
         
         # Test data without batch dimension
-        data = {'rgb': torch.randn(3, 16, 224, 224)}  # No batch dimension
+        data = {'rgb': torch.randn(3, 16, 336, 336)}  # No batch dimension
         
         is_fight, confidence, inference_time = predict_violence(
             mock_model, data, threshold=0.5, device='cpu'
@@ -282,7 +282,7 @@ class TestPredictViolence:
         # Very extreme logits
         mock_model = self.create_mock_model([-50.0, 50.0])
         
-        data = {'rgb': torch.randn(1, 3, 16, 224, 224)}
+        data = {'rgb': torch.randn(1, 3, 16, 336, 336)}
         
         with patch('builtins.print') as mock_print:
             is_fight, confidence, _ = predict_violence(
@@ -394,8 +394,8 @@ class TestIntegration:
         data = preprocess_frames(frames, compute_flow=False)
         
         # Check shapes before predict_violence (which adds batch dimension)
-        assert frames.shape == (16, 224, 224, 3)
-        assert data['rgb'].shape == (3, 16, 224, 224)
+        assert frames.shape == (16, 336, 336, 3)  # Updated size
+        assert data['rgb'].shape == (3, 16, 336, 336)
         
         # Create mock model and predict
         mock_model = Mock()
@@ -411,4 +411,50 @@ class TestIntegration:
         assert inference_time >= 0.15  # Should match mocked time difference
         
         # After predict_violence, data will have batch dimension
-        assert data['rgb'].shape == (1, 3, 16, 224, 224)
+        assert data['rgb'].shape == (1, 3, 16, 336, 336)
+
+    @patch('cv2.VideoCapture') 
+    def test_pipeline_with_motion_enhancement(self, mock_video_capture):
+        """Test pipeline with motion enhancement enabled"""
+        # Mock video capture
+        mock_cap = Mock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.side_effect = lambda prop: {
+            cv2.CAP_PROP_FRAME_COUNT: 50,
+            cv2.CAP_PROP_FPS: 30.0
+        }.get(prop, 0)
+        
+        dummy_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        mock_cap.read.return_value = (True, dummy_frame)
+        mock_cap.set.return_value = None
+        mock_cap.release.return_value = None
+        mock_video_capture.return_value = mock_cap
+        
+        # Extract frames
+        frames = extract_frames("dummy_video.mp4")
+        
+        # Test with optical flow computation
+        with patch('cv2.calcOpticalFlowFarneback') as mock_flow:
+            mock_flow.return_value = np.random.randn(336, 336, 2).astype(np.float32)
+            
+            data = preprocess_frames(frames, compute_flow=True)
+            
+            assert 'rgb' in data
+            assert 'flow' in data
+            assert data['rgb'].shape == (3, 16, 336, 336)
+            assert data['flow'].shape == (3, 16, 336, 336)
+            
+            # Verify optical flow was called for consecutive frame pairs
+            assert mock_flow.call_count == 15  # 16 frames = 15 flow computations
+
+    def test_normalization_consistency(self):
+        """Test that normalization is consistent across different input ranges"""
+        # Test with different value ranges
+        for max_val in [128, 255]:
+            frames = np.random.randint(0, max_val + 1, (16, 336, 336, 3), dtype=np.uint8)
+            data = preprocess_frames(frames, compute_flow=False)
+            
+            # Should normalize to roughly the same range regardless of input
+            rgb_tensor = data['rgb']
+            assert rgb_tensor.min() >= -3.0  # Roughly -2.5 with ImageNet normalization
+            assert rgb_tensor.max() <= 3.0   # Roughly +2.5 with ImageNet normalization
