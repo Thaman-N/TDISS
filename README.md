@@ -151,11 +151,13 @@ backend
 │   ├── x3d_model.py
 │   └── x3d_trainer.py
 └── tests
+    ├── pytest.ini
     ├── run_tests.py
     ├── test_api.py
     ├── test_database.py
     ├── test_detection.py
     ├── test_model.py
+    ├── test_requirements.txt
     └── test_utils.py
 
 frontend
@@ -163,12 +165,74 @@ frontend
 │   ├── demo-video.mp4
 │   └── vite.svg
 ├── src
+│   ├── App.css
 │   ├── App.jsx
+│   ├── index.css
+│   ├── main.jsx
 │   ├── components
+│   │   ├── LiveStreamDashboard.jsx
+│   │   ├── LandingPage.jsx
+│   │   ├── Navigation.jsx
+│   │   ├── ProcessingDashboard.jsx
+│   │   ├── ResultsViewer.jsx
+│   │   ├── StreamFullScreen.jsx
+│   │   ├── UploadInterface.jsx
+│   │   ├── react-bits
+│   │   │   ├── Animations
+│   │   │   │   └── MetallicPaint
+│   │   │   │       └── MetallicPaint.jsx
+│   │   │   ├── Backgrounds
+│   │   │   │   └── LightRays
+│   │   │   │       └── LightRays.jsx
+│   │   │   └── Components
+│   │   │       └── MagicBento
+│   │   │           └── MagicBento.jsx
+│   │   └── ui
+│   │       ├── alert.jsx
+│   │       ├── badge.jsx
+│   │       ├── button.jsx
+│   │       ├── card.jsx
+│   │       ├── dialog.jsx
+│   │       ├── dropdown-menu.jsx
+│   │       ├── input.jsx
+│   │       ├── label.jsx
+│   │       ├── navigation-menu.jsx
+│   │       ├── progress.jsx
+│   │       ├── sonner.jsx
+│   │       ├── table.jsx
+│   │       └── tabs.jsx
 │   ├── contexts
+│   │   └── WebSocketContext.jsx
 │   ├── hooks
+│   │   ├── useDarkMode.js
+│   │   └── useTheme.js
 │   └── lib
-└── tests
+│       └── utils.js
+├── tests
+│   ├── integration
+│   │   └── App.integration.test.jsx
+│   ├── unit
+│   │   ├── LandingPage.test.jsx
+│   │   ├── Navigation.test.jsx
+│   │   ├── ProcessingDashboard.test.jsx
+│   │   ├── ResultsViewer.test.jsx
+│   │   ├── UploadInterface.test.jsx
+│   │   ├── utils.test.js
+│   │   └── WebSocketContext.test.jsx
+│   ├── setup.jsx
+│   └── test-utils.jsx
+├── .gitignore
+├── components.json
+├── eslint.config.js
+├── index.html
+├── jsconfig.json
+├── jsrepo.json
+├── package-lock.json
+├── package.json
+├── postcss.config.js
+├── README.md
+├── tailwind.config.js
+└── vite.config.js
 ```
 
 ---
