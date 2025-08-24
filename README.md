@@ -64,22 +64,67 @@ npm run dev
 cd backend/trainingpipeline
 # Depending on hardware and location of dataset, command and paths in files need to be changed accordingly
 # may have to run export KMP_DUPLICATE_LIB_OK="TRUE" or $env:KMP_DUPLICATE_LIB_OK = "TRUE" on powershell
-python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir stable_checkpoints
+python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
 ```
+
+## Running Unit & Integration Tests
+```bash
+# For backend tests
+cd backend/tests
+# Updated quick test suite
+python .\run_tests.py quick
+# Only tests that exist
+python .\run_tests.py core
+# Tests for your optimized components
+python .\run_tests.py architecture
+# Only model tests
+python .\run_tests.py model
+# All tests
+python .\run_tests.py all
+# Run tests with coverage
+python .\run_tests.py coverage
+```
+```bash
+# For frontend tests
+cd frontend/tests
+# Run tests in watch mode
+npm test
+# Run tests once
+npm run test:run
+# Run tests with coverage
+npm run test:coverage
+```
+
+## Zero-shot classification on RLVS
+```bash
+python evaluate_rlvs.py "your/dataset/path"
+```
+
 
 ## Project Structure
 
 ```
 backend
+├── evaluate_rlvs.py
 ├── main.py
 ├── model.py
 ├── torch_detection.py
-├── stable_best_model.pth
-└── trainingpipeline
-    ├── train_x3d_violence.py
-    ├── x3d_dataset.py
-    ├── x3d_model.py
-    └──x3d_trainer.py
+├── nineone75.pth
+├── trainingpipeline
+│   ├── testval.py
+│   ├── train_x3d_violence.py
+│   ├── x3d_dataset.py
+│   ├── x3d_model.py
+│   └── x3d_trainer.py
+└── tests
+    ├── pytest.ini
+    ├── run_tests.py
+    ├── test_api.py
+    ├── test_database.py
+    ├── test_detection.py
+    ├── test_model.py
+    ├── test_requirements.txt
+    └── test_utils.py
 
 frontend
 ├── public
@@ -129,6 +174,19 @@ frontend
 │   │   └── useTheme.js
 │   └── lib
 │       └── utils.js
+├── tests
+│   ├── integration
+│   │   └── App.integration.test.jsx
+│   ├── unit
+│   │   ├── LandingPage.test.jsx
+│   │   ├── Navigation.test.jsx
+│   │   ├── ProcessingDashboard.test.jsx
+│   │   ├── ResultsViewer.test.jsx
+│   │   ├── UploadInterface.test.jsx
+│   │   ├── utils.test.js
+│   │   └── WebSocketContext.test.jsx
+│   ├── setup.jsx
+│   └── test-utils.jsx
 ├── .gitignore
 ├── components.json
 ├── eslint.config.js
