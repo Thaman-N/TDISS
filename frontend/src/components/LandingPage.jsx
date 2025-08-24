@@ -76,33 +76,33 @@ const AnimatedSection = ({ id, children, className = "", delay = 0 }) => {
 const LandingPage = () => {
   const statsData = [
     { label: 'Stream/Playback Modes Supported', value: 'Stream & Playback', icon: Eye },
-    { label: 'Processing Speed', value: '<2s', icon: Zap },
+    { label: 'Processing Speed', value: '<20ms', icon: Zap },
     { label: 'Videos used to train', value: '2000+', icon: Play },
-    { label: 'Accuracy Rate', value: '84%', icon: CheckCircle }
+    { label: 'Accuracy Rate', value: '91.25%', icon: CheckCircle }
   ]
 
   const bentoItems = [
     {
       title: 'Real-time Detection',
-      description: 'Advanced X3D neural networks analyze video content in real-time',
+      description: 'Advanced neural networks analyze video content in real-time',
       icon: Brain,
       className: 'col-span-2'
     },
     {
       title: 'High Accuracy',
-      description: '84% validation accuracy with minimal false positives',
+      description: '91.25% validation accuracy with minimal false positives',
       icon: Eye,
       className: 'col-span-1'
     },
     {
       title: 'Lightning Fast',
-      description: 'Process videos under 2 seconds',
+      description: 'Process videos under 20 ms',
       icon: Zap,
       className: 'col-span-1'
     },
     {
       title: 'Multiple Formats & Live Streams',
-      description: 'Supports Live Streams as well as MP4, AVI, MOV, MKV and more video formats for pre-recorded videos',
+      description: 'Supports Live Streams as well as MP4, AVI and more video formats for pre-recorded videos',
       icon: Upload,
       className: 'col-span-2'
     }
@@ -231,7 +231,7 @@ const LandingPage = () => {
               <span className="text-primary">Redefined</span>
             </h1>
             <p className="text-xl md:text-2xl text-muted-foreground mb-12 max-w-3xl mx-auto leading-relaxed">
-              Deploy cutting-edge X3D neural networks to detect aggression in videos with unprecedented accuracy and speed.
+              Deploy cutting-edge neural networks to detect aggression in videos with unprecedented accuracy and speed.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link to="/upload">
@@ -326,14 +326,14 @@ const LandingPage = () => {
               How It Works
             </h2>
             <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              Three simple steps to detect aggression in your video content
+              Three simple steps to detect aggression
             </p>
           </AnimatedSection>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
             {[
-              { step: '01', title: 'Upload Video', description: 'Drag and drop your video file or provide a file path' },
-              { step: '02', title: 'AI Analysis', description: 'Our X3D model processes frames and detects aggression' },
+              { step: '01', title: 'Choose video or stream', description: 'Upload your video file or enter a RTSP URL for live streaming cameras' },
+              { step: '02', title: 'AI Analysis', description: 'Our model processes frames and detects aggression' },
               { step: '03', title: 'Get Results', description: 'Receive detailed analysis with timestamps and confidence scores' }
             ].map((item, index) => (
               <AnimatedSection 
@@ -362,7 +362,7 @@ const LandingPage = () => {
               Ready to Get Started?
             </h2>
             <p className="text-xl text-muted-foreground mb-12 max-w-2xl mx-auto">
-              Join the future of video content moderation with AI-powered aggression detection
+              Join the future of surveillance with AI-powered aggression detection
             </p>
             <div className="flex flex-col gap-4 items-center mb-8">
   <Link to="/upload">
@@ -425,15 +425,15 @@ const LandingPage = () => {
                 <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="text-center p-4 bg-primary/5 rounded-lg">
                     <div className="text-2xl font-bold text-primary mb-1">Real-time</div>
-                    <div className="text-sm text-muted-foreground">Processing Speed</div>
+                    <div className="text-sm text-muted-foreground">Process Live Streams</div>
                   </div>
                   <div className="text-center p-4 bg-green-500/5 rounded-lg">
-                    <div className="text-2xl font-bold text-green-600 mb-1">84%</div>
-                    <div className="text-sm text-muted-foreground">Accuracy Rate</div>
+                    <div className="text-2xl font-bold text-green-600 mb-1">91.25%</div>
+                    <div className="text-sm text-muted-foreground">Validation Accuracy</div>
                   </div>
                   <div className="text-center p-4 bg-blue-500/5 rounded-lg">
-                    <div className="text-2xl font-bold text-blue-600 mb-1">X3D</div>
-                    <div className="text-sm text-muted-foreground">Neural Network</div>
+                    <div className="text-2xl font-bold text-blue-600 mb-1">&lt;20ms</div>
+                    <div className="text-sm text-muted-foreground">Inference Time</div>
                   </div>
                 </div>
               </Card>
