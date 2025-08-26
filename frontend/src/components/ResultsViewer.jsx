@@ -371,209 +371,223 @@ const ResultsViewer = () => {
   return (
     <div className="container mx-auto px-4 py-8">
       <style>{`
-        /* Enhanced Results Viewer Animations */
-        .back-button {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-          position: relative;
-          overflow: hidden;
-        }
-        .back-button::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: -100%;
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-          transition: left 0.5s;
-        }
-        .back-button:hover::before {
-          left: 100%;
-        }
-        .back-button:hover {
-          transform: translateX(-4px) translateY(-2px);
-          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
-        }
-        .back-button:hover .back-icon {
-          transform: translateX(-2px);
-        }
-        
-        .action-button {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-          position: relative;
-          overflow: hidden;
-        }
-        .action-button::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: -100%;
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-          transition: left 0.5s;
-        }
-        .action-button:hover::before {
-          left: 100%;
-        }
-        .action-button:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
-        }
-        
-        .result-banner {
-          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-          cursor: default;
-        }
-        .result-banner:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
-        }
-        .result-banner:hover .banner-icon {
-          transform: scale(1.1) rotate(5deg);
-        }
-        .result-banner:hover .banner-badge {
-          transform: scale(1.05);
-        }
-        
-        .video-card {
-          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-          position: relative;
-          overflow: hidden;
-        }
-        .video-card::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 0;
-          background: linear-gradient(135deg, hsl(var(--primary) / 0.03), transparent);
-          transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .video-card:hover::before {
-          height: 100%;
-        }
-        .video-card:hover {
-          transform: translateY(-3px);
-          box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
-          border-color: hsl(var(--primary) / 0.2);
-        }
-        
-        .segment-card {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-          cursor: pointer;
-          position: relative;
-        }
-        .segment-card::before {
-          content: '';
-          position: absolute;
-          left: 0;
-          top: 0;
-          width: 0;
-          height: 100%;
-          background: linear-gradient(90deg, hsl(var(--destructive) / 0.1), transparent);
-          transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .segment-card:hover::before {
-          width: 100%;
-        }
-        .segment-card:hover {
-          transform: translateX(6px) translateY(-2px);
-          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
-          border-color: hsl(var(--destructive) / 0.3);
-        }
-        .segment-card:hover .segment-badge {
-          transform: scale(1.1);
-        }
-        .segment-card:hover .segment-number {
-          transform: scale(1.1);
-          color: hsl(var(--destructive));
-        }
-        
-        .metadata-card {
-          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-          cursor: default;
-          position: relative;
-          overflow: hidden;
-        }
-        .metadata-card::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          right: 0;
-          width: 0;
-          height: 100%;
-          background: linear-gradient(270deg, hsl(var(--primary) / 0.05), transparent);
-          transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .metadata-card:hover::before {
-          width: 100%;
-        }
-        .metadata-card:hover {
-          transform: translateY(-4px) scale(1.02);
-          box-shadow: 0 12px 25px rgba(0, 0, 0, 0.1);
-          border-color: hsl(var(--primary) / 0.2);
-        }
-        .metadata-card:hover .card-icon {
-          transform: scale(1.1) rotate(5deg);
-          color: hsl(var(--primary));
-        }
-        
-        .quick-action {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .quick-action:hover {
-          transform: translateX(6px) translateY(-2px);
-          background: hsl(var(--primary) / 0.05);
-          border-color: hsl(var(--primary) / 0.2);
-        }
-        .quick-action:hover .action-icon {
-          transform: scale(1.1);
-          color: hsl(var(--primary));
-        }
-        
-        /* Icon animations */
-        .back-icon {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .banner-icon {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .banner-badge {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .segment-badge {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .segment-number {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .card-icon {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .action-icon {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        
-        /* Video container styling */
-        .video-container {
-          position: relative;
-          background: #000;
-          border-radius: 8px;
-          overflow: hidden;
-        }
-        .video-element {
-          width: 100%;
-          height: 100%;
-          border-radius: 8px;
-        }
-        .video-fallback {
-          background: linear-gradient(135deg, #1f2937, #111827);
-          border: 2px dashed #374151;
-          border-radius: 8px;
-        }
-      `}</style>
+  /* Enhanced Results Viewer Animations */
+  .back-button {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+  }
+  .back-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+    transition: left 0.5s;
+  }
+  .back-button:hover::before {
+    left: 100%;
+  }
+  .back-button:hover {
+    transform: translateX(-4px) translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+  }
+  .back-button:hover .back-icon {
+    transform: translateX(-2px);
+  }
+  
+  .action-button {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+  }
+  .action-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+    transition: left 0.5s;
+  }
+  .action-button:hover::before {
+    left: 100%;
+  }
+  .action-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+  }
+  
+  .result-banner {
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: default;
+  }
+  .result-banner:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+  }
+  .result-banner:hover .banner-icon {
+    transform: scale(1.1) rotate(5deg);
+  }
+  .result-banner:hover .banner-badge {
+    transform: scale(1.05);
+  }
+  
+  .video-card {
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+  }
+  .video-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 0;
+    background: linear-gradient(135deg, hsl(var(--primary) / 0.03), transparent);
+    transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .video-card:hover::before {
+    height: 100%;
+  }
+  .video-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+    border-color: hsl(var(--primary) / 0.2);
+  }
+  
+  .segment-card {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+    position: relative;
+  }
+  .segment-card::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 100%;
+    background: linear-gradient(90deg, hsl(var(--destructive) / 0.1), transparent);
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .segment-card:hover::before {
+    width: 100%;
+  }
+  .segment-card:hover {
+    transform: translateX(6px) translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    border-color: hsl(var(--destructive) / 0.3);
+  }
+  .segment-card:hover .segment-badge {
+    transform: scale(1.1);
+  }
+  .segment-card:hover .segment-number {
+    transform: scale(1.1);
+    color: hsl(var(--destructive));
+  }
+  
+  .metadata-card {
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: default;
+    position: relative;
+    overflow: hidden;
+  }
+  .metadata-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 0;
+    height: 100%;
+    background: linear-gradient(270deg, hsl(var(--primary) / 0.05), transparent);
+    transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .metadata-card:hover::before {
+    width: 100%;
+  }
+  .metadata-card:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 12px 25px rgba(0, 0, 0, 0.1);
+    border-color: hsl(var(--primary) / 0.2);
+  }
+  .metadata-card:hover .card-icon {
+    transform: scale(1.1) rotate(5deg);
+    color: hsl(var(--primary));
+  }
+  
+  /* Quick action buttons fix */
+  .quick-action {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    text-align: left;
+    border: 1px solid hsl(var(--border));
+    padding: 0.75rem;
+    margin: 0.25rem 0;
+  }
+  
+  .quick-action:hover {
+    transform: translateX(6px) translateY(-2px);
+    background: hsl(var(--primary) / 0.05);
+    border-color: hsl(var(--primary) / 0.2);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+  }
+  
+  .quick-action:hover .action-icon {
+    transform: scale(1.1);
+    color: hsl(var(--primary));
+  }
+  
+  /* Icon animations */
+  .back-icon {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .banner-icon {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .banner-badge {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .segment-badge {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .segment-number {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .card-icon {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .action-icon {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  /* Video container styling */
+  .video-container {
+    position: relative;
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .video-element {
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+  }
+  .video-fallback {
+    background: linear-gradient(135deg, #1f2937, #111827);
+    border: 2px dashed #374151;
+    border-radius: 8px;
+  }
+`}</style>
+
       
       {/* Header */}
       <div className="flex items-center justify-between mb-8">

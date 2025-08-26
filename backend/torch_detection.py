@@ -62,7 +62,8 @@ def load_violence_detection_model(model_path, device=None):
             num_classes=2,
             use_motion_enhancement=True,  # Match training
             dropout_rate=0.2,  # Match training
-            motion_weight=0.3   # Match training
+            motion_weight=0.3,   # Match training
+            device=device.type 
         )
         
         # Load state dict

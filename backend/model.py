@@ -123,13 +123,15 @@ class OptimizedX3DViolenceDetector(nn.Module):
         dropout_rate: float = 0.15,  # Reduced for small dataset
         use_motion_enhancement: bool = True,
         motion_weight: float = 0.3,
-        device: str = "cuda"
+        device: str = "auto" 
     ):
         super().__init__()
         
         self.use_motion_enhancement = use_motion_enhancement
         self.motion_weight = motion_weight
         self.num_classes = num_classes
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
         
         # Load pre-trained X3D model
@@ -382,10 +384,13 @@ def create_model(
     model_name: str = "x3d_m",
     num_classes: int = 2,
     use_motion_enhancement: bool = True,
-    device: str = "cuda"
+    device: str = "auto"
 ) -> OptimizedX3DViolenceDetector:
     """Create optimized X3D violence detection model"""
     
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
     model = OptimizedX3DViolenceDetector(
         x3d_model_name=model_name,
         num_classes=num_classes,

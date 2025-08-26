@@ -60,13 +60,20 @@ cd TDISS
 2. **Install dependencies**
 
 ```bash
-# 1. Create new environment
+# Create conda environment
 conda env create -f environment.yaml
 
-# 2. Activate environment
-conda activate violence_detect
+# Activate environment
+conda activate violence_detect2
 
-# 3. Frontend setup
+# Install pip packages
+pip install -r requirements.txt
+
+# Install PyTorch separately(Only run 1 of the following)
+pip install -c constraints.txt torch torchvision torchaudio #cpu build
+pip install -c constraints.txt torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 #cuda build
+
+# Frontend setup
 cd frontend
 npm install
 ```
