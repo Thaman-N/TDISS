@@ -115,23 +115,38 @@ class OptimizedX3DViolenceDetector(nn.Module):
     - High spatial resolution, lightweight width
     - Motion-aware architecture
     """
-    
+        
     def __init__(
         self,
         x3d_model_name: str = "x3d_m",
         num_classes: int = 2,
-        dropout_rate: float = 0.15,  # Reduced for small dataset
+        dropout_rate: float = 0.15,
         use_motion_enhancement: bool = True,
         motion_weight: float = 0.3,
-        device: str = "auto" 
+        device: str = "auto"
     ):
         super().__init__()
+        
+        # Auto-detect device with CUDA compatibility check
+        if device == "auto":
+            if torch.cuda.is_available():
+                try:
+                    # Test CUDA compatibility with a small tensor operation
+                    test_tensor = torch.zeros(1, device='cuda')
+                    test_tensor = test_tensor + 1
+                    device = "cuda"
+                    print("CUDA is available and compatible")
+                except Exception as e:
+                    print(f"CUDA available but incompatible: {e}")
+                    print("Falling back to CPU")
+                    device = "cpu"
+            else:
+                device = "cpu"
+                print("CUDA not available, using CPU")
         
         self.use_motion_enhancement = use_motion_enhancement
         self.motion_weight = motion_weight
         self.num_classes = num_classes
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
         
         # Load pre-trained X3D model
@@ -144,7 +159,7 @@ class OptimizedX3DViolenceDetector(nn.Module):
         # Get feature dimension
         self.feature_dim = self._get_feature_dim()
         
-        # Optimized motion enhancement
+        # Rest of the method remains the same...
         if self.use_motion_enhancement:
             self.motion_module = MotionEnhancementModule(
                 input_dim=3,
@@ -170,7 +185,7 @@ class OptimizedX3DViolenceDetector(nn.Module):
         
         print(f"Optimized model initialized with {total_features} input features")
         print(f"X3D features: {self.feature_dim}, Motion features: {128 if use_motion_enhancement else 0}")
-    
+
     def _load_and_optimize_x3d(self, model_name: str):
         """Load X3D and apply temporal kernel optimizations"""
         try:

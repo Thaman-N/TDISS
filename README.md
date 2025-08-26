@@ -73,6 +73,8 @@ pip install -r requirements.txt
 pip install -c constraints.txt torch torchvision torchaudio #cpu build
 pip install -c constraints.txt torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 #cuda build
 
+#if you run into slowapi or fvcore import errors, run - pip install slowapi fvcore
+
 # Frontend setup
 cd frontend
 npm install

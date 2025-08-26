@@ -28,9 +28,21 @@ def load_violence_detection_model(model_path, device=None):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found at {model_path}")
     
-    # Determine device
+    # Determine device with compatibility check
     if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            try:
+                # Test CUDA compatibility
+                test_tensor = torch.zeros(1, device='cuda')
+                test_tensor = test_tensor + 1
+                device = torch.device('cuda')
+                print("Using CUDA")
+            except Exception as e:
+                print(f"CUDA incompatible ({e}), using CPU")
+                device = torch.device('cpu')
+        else:
+            device = torch.device('cpu')
+            print("CUDA not available, using CPU")
     else:
         device = torch.device(device)
     
@@ -63,9 +75,10 @@ def load_violence_detection_model(model_path, device=None):
             use_motion_enhancement=True,  # Match training
             dropout_rate=0.2,  # Match training
             motion_weight=0.3,   # Match training
-            device=device.type 
+            device=device.type   # Pass the detected device type
         )
         
+        # Rest of the function remains the same...
         # Load state dict
         if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
@@ -104,7 +117,7 @@ def load_violence_detection_model(model_path, device=None):
         
         print("Trained X3D model loaded successfully and ready for inference.")
         
-        # Run a test to check for extreme logits
+        # Rest remains the same (warm-up prediction)...
         print("Running model warm-up prediction...")
         dummy_rgb = torch.zeros((1, 3, NUM_FRAMES, INPUT_SIZE, INPUT_SIZE), dtype=torch.float32, device=device)
         dummy_data = {'rgb': dummy_rgb}
