@@ -64,7 +64,7 @@ cd TDISS
 conda env create -f environment.yaml
 
 # Activate environment
-conda activate violence_detect2
+conda activate violence_detect
 
 # Install pip packages
 pip install -r requirements.txt
