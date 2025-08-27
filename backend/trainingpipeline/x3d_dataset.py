@@ -31,7 +31,7 @@ class CUENetStyleDataset(Dataset):
         self,
         dataset_path: str,
         split: str = "train",
-        clip_len: int = 32,  # Keep 32 frames for now, CUE-Net uses 64
+        clip_len: int = 16,  # Keep 16 frames for now, CUE-Net uses 64
         spatial_size: int = 336,  # CUE-Net uses 336×336
         sampling_rate: int = 4,
         num_retries: int = 10,
@@ -419,7 +419,7 @@ def create_cuenet_dataloaders(
     dataset_path: str,
     batch_size: int = 8,
     num_workers: int = 4,
-    clip_len: int = 32,
+    clip_len: int = 16,
     spatial_size: int = 336,  # CUE-Net uses 336×336
     max_videos_per_class: Optional[int] = None
 ):
