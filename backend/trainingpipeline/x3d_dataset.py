@@ -13,7 +13,7 @@ warnings.filterwarnings('ignore')
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
-    print("✅ YOLO available for CUE-Net spatial cropping")
+    # print("✅ YOLO available for CUE-Net spatial cropping")
 except ImportError:
     YOLO_AVAILABLE = False
     print("⚠️  YOLO not available - install with: pip install ultralytics")
@@ -31,7 +31,7 @@ class CUENetStyleDataset(Dataset):
         self,
         dataset_path: str,
         split: str = "train",
-        clip_len: int = 16,  # Keep 16 frames for now, CUE-Net uses 64
+        clip_len: int = 32,  # Keep 32 frames for now, CUE-Net uses 64
         spatial_size: int = 336,  # CUE-Net uses 336×336
         sampling_rate: int = 4,
         num_retries: int = 10,
@@ -184,7 +184,7 @@ class CUENetStyleDataset(Dataset):
                         resized_frame = cv2.resize(cropped_frame, (W, H))
                         cropped_frames.append(resized_frame)
                     
-                    print(f"✅ CUE-Net crop applied: ({x_min},{y_min})-({x_max},{y_max})")
+                    # print(f"✅ CUE-Net crop applied: ({x_min},{y_min})-({x_max},{y_max})")
                     return np.array(cropped_frames)
             
             # If no people detected, return original frames
@@ -419,7 +419,7 @@ def create_cuenet_dataloaders(
     dataset_path: str,
     batch_size: int = 8,
     num_workers: int = 4,
-    clip_len: int = 16,
+    clip_len: int = 32,
     spatial_size: int = 336,  # CUE-Net uses 336×336
     max_videos_per_class: Optional[int] = None
 ):

@@ -403,14 +403,7 @@ def create_model(
     print(f"Optimized Model: {model_name}")
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
-    print(f"Motion enhancement: {use_motion_enhancement}")
-    print("Applied optimizations:")
-    print("  ✓ Reduced temporal kernels (16→3) for +2.39% accuracy")
-    print("  ✓ Added lightweight SE blocks for channel attention")
-    print("  ✓ Simple concatenation (better for small datasets)")
-    print("  ✓ Optimized for motion detection tasks")
-    print("  ✓ Maintained efficient parameter budget")
-    
+    print(f"Motion enhancement: {use_motion_enhancement}")    
     return model
 
 

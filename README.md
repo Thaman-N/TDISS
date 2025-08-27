@@ -115,6 +115,12 @@ python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8
 
 ## Running Tests
 
+**Testing Model Performance on Val split**
+```bash
+cd backend/trainingpipeline
+python testval.py --dataset "path/to/dataset" --model "path/to/model.pth" --runs 5 --output "my_custom_output_folder"
+```
+
 **Backend tests:**
 
 ```bash

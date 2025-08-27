@@ -430,13 +430,6 @@ class OptimizedX3DTrainer:
         print(f"Training samples: {len(self.train_loader.dataset)}")
         print(f"Validation samples: {len(self.val_loader.dataset)}")
         print(f"Batch size: {self.train_loader.batch_size}")
-        print(f"PROVEN OPTIMIZATIONS ACTIVE:")
-        print(f"  ✓ Temporal kernel optimization (+2.39% accuracy)")
-        print(f"  ✓ SE blocks for channel attention")
-        print(f"  ✓ ROI crop augmentation (+6.78% accuracy)")
-        print(f"  ✓ Motion-aware flipping (+7.83% accuracy)")
-        print(f"  ✓ Keyframe focus (eliminates 25% redundant frames)")
-        print(f"  ✓ Working simple attention (82% → 86.75%)")
         print("="*60)
         
         training_start_time = time.time()
@@ -598,11 +591,3 @@ def create_optimized_optimizer_and_scheduler(
 
 if __name__ == "__main__":
     print("Optimized X3D Trainer ready!")
-    print("Key optimizations:")
-    print("- Temporal kernel optimization (+2.39% accuracy)")
-    print("- SE blocks for efficient channel attention")
-    print("- Works with proven augmentation techniques")
-    print("- ROI crop augmentation (+6.78% accuracy)")
-    print("- Motion-aware flipping (+7.83% accuracy)")
-    print("- Keyframe focus (eliminates 25% redundant frames)")
-    print("- Maintains your working simple attention approach")

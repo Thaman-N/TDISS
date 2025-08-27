@@ -1,20 +1,4 @@
 """
-OPTIMIZED X3D Violence Detection Training Script
-
-This script integrates ALL PROVEN optimizations:
-
-ARCHITECTURE IMPROVEMENTS:
-✓ Temporal kernel optimization (+2.39% accuracy)
-✓ Lightweight SE blocks for channel attention
-✓ High spatial resolution, efficient width
-✓ Motion-focused architecture
-
-AUGMENTATION IMPROVEMENTS:
-✓ ROI crop augmentation (+6.78% accuracy)
-✓ Motion-aware horizontal flipping (+7.83% accuracy)
-✓ Keyframe focus (eliminates 25% redundant frames)
-✓ Removed complex augmentations that hurt small datasets
-
 Optimized for RTX 5090 with CUDA 12.8 and 24GB VRAM.
 Maintains 3M parameter budget and 15ms inference time.
 
@@ -159,7 +143,7 @@ def parse_args():
     parser.add_argument(
         "--mixed_precision", 
         action="store_true", 
-        default=True,
+        default=False,
         help="Use mixed precision training"
     )
     parser.add_argument(
@@ -274,22 +258,6 @@ def main():
     
     # Print OPTIMIZED training configuration
     print("\n" + "="*60)
-    print("🚀 OPTIMIZED TRAINING CONFIGURATION 🚀")
-    print("="*60)
-    print("🎯 PROVEN OPTIMIZATIONS ENABLED:")
-    print("")
-    print("📐 ARCHITECTURE IMPROVEMENTS:")
-    print("   ✓ Temporal kernel optimization (+2.39% accuracy)")
-    print("   ✓ Lightweight SE blocks for channel attention")
-    print("   ✓ High spatial resolution, efficient width")
-    print("   ✓ Motion-focused architecture")
-    print("")
-    print("🎨 AUGMENTATION IMPROVEMENTS:")
-    print("   ✓ ROI crop augmentation (+6.78% accuracy)")
-    print("   ✓ Motion-aware horizontal flipping (+7.83% accuracy)")
-    print("   ✓ Keyframe focus (eliminates 25% redundant frames)")
-    print("   ✓ Removed complex augmentations that hurt small datasets")
-    print("")
     print("⚙️ TRAINING OPTIMIZATIONS:")
     print(f"   ✓ Gradient clipping: {args.gradient_clip_val}")
     print(f"   ✓ Learning rate warmup: {args.warmup_epochs} epochs")
@@ -375,9 +343,7 @@ def main():
     )
     
     # Start OPTIMIZED training
-    print("\n" + "="*60)
     print("🚀 STARTING OPTIMIZED TRAINING WITH PROVEN TECHNIQUES!")
-    print("="*60)
     
     try:
         history = trainer.train(
@@ -393,14 +359,6 @@ def main():
         print(f"📈 Final gradient norm: {history['gradient_norms'][-1]:.3f}")
         print(f"💾 Checkpoints saved to: {args.checkpoint_dir}")
         print("")
-        print("✅ PROVEN OPTIMIZATIONS DELIVERED:")
-        print("   🎯 Temporal kernel optimization: +2.39% accuracy")
-        print("   🖼️ ROI crop augmentation: +6.78% accuracy")
-        print("   🔄 Motion-aware flipping: +7.83% accuracy")
-        print("   🎬 Keyframe focus: 25% less redundant frames")
-        print("   ⚡ SE blocks: Efficient channel attention")
-        print("   🧠 Working simple attention: Proven effective")
-        print("")
         
         # Verify model stability
         final_grad_norm = history['gradient_norms'][-1] if history['gradient_norms'] else 0
@@ -410,16 +368,7 @@ def main():
             print("⚠️ Model may still have stability issues")
         
         print("="*60)
-        
-        # Print expected improvements
-        print("\n📊 EXPECTED IMPROVEMENTS SUMMARY:")
-        print("   Base accuracy: Your previous 86.75%")
-        print("   + Temporal kernels: +2.39% → ~89.14%")
-        print("   + ROI augmentation: +6.78% → ~95.92%")
-        print("   + Motion flipping: +7.83% → Beyond 100% (theoretical)")
-        print("   Note: Improvements may not be perfectly additive")
-        print("   Expected realistic improvement: 5-10% over current best")
-        
+                
     except KeyboardInterrupt:
         print("\n⛔ Training interrupted by user!")
         print("✅ Checkpoints have been saved.")
