@@ -52,7 +52,7 @@ def secure_filename(filename):
     return filename
 
 # Import your PyTorch detection module (copy these files to the same directory)
-from torch_detection import load_violence_detection_model, extract_frames, preprocess_frames, predict_violence
+from torch_detection import load_violence_detection_model, extract_frames, preprocess_frames, predict_violence, extract_consecutive_frame_sequences
 
 # Event storage classes
 DB_PATH = "violence_events.db"
@@ -1547,23 +1547,17 @@ def generate_thumbnail(video_path: str, output_path: str, frame_number: int = 0)
         return False
 
 def process_video_sync(job_id: str, video_path: str, threshold: float = None):
-    """Process a video for violence detection using X3D model - SYNC version like Flask"""
-
-    print(f"Starting process_video_sync for job {job_id}")
+    """Process video using consecutive frame sequences with first violence inference time tracking"""
 
     if model is None:
-        print(f"Model not loaded for job {job_id}")
         active_jobs[job_id]['status'] = 'error'
         active_jobs[job_id]['message'] = 'Model not loaded'
-        # Can't await in sync function, so we'll skip websocket updates for now
         return
 
     if threshold is None:
         threshold = DETECTION_THRESHOLD
 
     try:
-        print(f"Starting video processing for job {job_id}")
-
         # Extract metadata
         metadata = get_video_metadata(video_path)
         if metadata is None:
@@ -1581,86 +1575,93 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
         generate_thumbnail(video_path, thumbnail_path)
         active_jobs[job_id]['thumbnail'] = f"/api/results/{job_id}_thumbnail.jpg"
 
-        # Extract frames
-        frames = extract_frames(video_path)
-        if frames is None or len(frames) == 0:
+        # Extract consecutive frame sequences
+        hop_seconds = 2.0
+        sequences, timestamps = extract_consecutive_frame_sequences(
+            video_path, sequence_length=16, hop_seconds=hop_seconds
+        )
+        
+        if not sequences:
             active_jobs[job_id]['status'] = 'error'
-            active_jobs[job_id]['message'] = 'Failed to extract frames'
+            active_jobs[job_id]['message'] = 'Failed to extract frame sequences'
             return
 
         active_jobs[job_id]['progress'] = 30
-        active_jobs[job_id]['message'] = 'Preprocessing frames'
+        active_jobs[job_id]['message'] = 'Processing sequences'
 
-        # Determine if model uses motion enhancement
+        # Determine motion enhancement
         use_motion = hasattr(model, 'use_motion_enhancement') and model.use_motion_enhancement
 
-        # Preprocess frames
-        processed_data = preprocess_frames(frames, compute_flow=use_motion)
-
-        active_jobs[job_id]['progress'] = 50
-        active_jobs[job_id]['message'] = 'Running violence detection'
-
-        # Make prediction on the full video
-        is_fight, confidence, inference_time = predict_violence(model, processed_data, threshold, debug=True)
-
-        # Process video with sliding window for detailed timeline
+        # Process each sequence independently with individual timing
         segments = []
-        window_size = 16
-        stride = 4
-
-        total_frames = len(frames)
-        duration = metadata['duration']
-
-        if total_frames > window_size:
-            window_count = (total_frames - window_size) // stride + 1
-
-            for i in range(window_count):
-                active_jobs[job_id]['progress'] = 50 + int(40 * i / window_count)
-
-                start_idx = i * stride
-                end_idx = start_idx + window_size
-
-                window_frames = frames[start_idx:end_idx]
-                if len(window_frames) == window_size:
-                    window_data = preprocess_frames(window_frames, compute_flow=use_motion)
-                    segment_threshold = threshold + 0.1
-                    is_violent, prob, _ = predict_violence(model, window_data, segment_threshold, debug=False)
-
-                    if is_violent and prob > segment_threshold:
-                        start_time = (start_idx / total_frames) * duration
-                        end_time = (end_idx / total_frames) * duration
-
-                        segments.append({
-                            'start': start_time,
-                            'end': end_time,
-                            'confidence': float(prob),
-                            'start_formatted': f"{int(start_time//60)}:{int(start_time%60):02d}",
-                            'end_formatted': f"{int(end_time//60)}:{int(end_time%60):02d}"
-                        })
-        else:
-            if is_fight and confidence > threshold:
+        total_sequences = len(sequences)
+        first_violence_inference_time = None  # Track first violence detection time
+        total_inference_time = 0.0  # Track total processing time for reference
+        
+        for i, (sequence, (start_time, end_time)) in enumerate(zip(sequences, timestamps)):
+            progress = 30 + int(60 * i / total_sequences)
+            active_jobs[job_id]['progress'] = progress
+            active_jobs[job_id]['message'] = f'Analyzing sequence {i+1}/{total_sequences}'
+            
+            # Preprocess this sequence
+            processed_data = preprocess_frames(sequence, compute_flow=use_motion)
+            
+            # Make prediction on this sequence WITH individual timing
+            is_violent, confidence, inference_time = predict_violence(
+                model, processed_data, threshold, debug=False
+            )
+            
+            # Add to total inference time for reference
+            total_inference_time += inference_time
+            
+            if is_violent and confidence > threshold:
+                # Store inference time of FIRST violent event detected
+                if first_violence_inference_time is None:
+                    first_violence_inference_time = inference_time
+                    print(f"First violence detected at {start_time:.1f}s with inference time: {inference_time:.3f}s")
+                
                 segments.append({
-                    'start': 0,
-                    'end': duration,
+                    'start': start_time,
+                    'end': end_time,
                     'confidence': float(confidence),
-                    'start_formatted': "0:00",
-                    'end_formatted': metadata['duration_formatted']
+                    'inference_time': inference_time,  # Store individual inference time
+                    'start_formatted': f"{int(start_time//60)}:{int(start_time%60):02d}",
+                    'end_formatted': f"{int(end_time//60)}:{int(end_time%60):02d}"
                 })
+                print(f"Violence detected in sequence {i+1}: {start_time:.1f}-{end_time:.1f}s, confidence: {confidence:.3f}, inference: {inference_time:.3f}s")
 
-        # Merge overlapping segments
+        # Merge close segments (within 1 second) while preserving first inference time
         if segments:
             merged_segments = [segments[0]]
             for segment in segments[1:]:
                 prev = merged_segments[-1]
-                if segment['start'] <= prev['end'] + 2.0:
+                if segment['start'] <= prev['end'] + 1.0:
                     prev['end'] = max(prev['end'], segment['end'])
                     prev['confidence'] = max(prev['confidence'], segment['confidence'])
                     prev['end_formatted'] = f"{int(prev['end']//60)}:{int(prev['end']%60):02d}"
+                    # Keep the earlier inference time when merging
+                    if segment['inference_time'] < prev['inference_time']:
+                        prev['inference_time'] = segment['inference_time']
                 else:
                     merged_segments.append(segment)
             segments = merged_segments
 
-        # Save final results
+        # Calculate results
+        has_violence = len(segments) > 0
+        violence_duration = sum(seg['end'] - seg['start'] for seg in segments) if segments else 0
+        overall_confidence = max(seg['confidence'] for seg in segments) if segments else 0
+        
+        duration = metadata['duration']
+        violence_percentage = (violence_duration / duration * 100) if duration > 0 else 0
+
+        # Use first violence inference time, fallback to average if no violence detected
+        display_inference_time = first_violence_inference_time if first_violence_inference_time is not None else (total_inference_time / total_sequences if total_sequences > 0 else 0.0)
+
+        print(f"Analysis complete: {len(segments)} violent segments, {violence_duration:.1f}s total, {violence_percentage:.1f}%")
+        print(f"First violence inference time: {first_violence_inference_time:.3f}s" if first_violence_inference_time else "No violence detected")
+        print(f"Total processing time: {total_inference_time:.3f}s for {total_sequences} sequences")
+
+        # Build result
         result = {
             'job_id': job_id,
             'video_path': video_path,
@@ -1672,64 +1673,72 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
                 'architecture': 'X3D-M',
                 'motion_enhancement': use_motion,
                 'input_frames': 16,
-                'input_resolution': '336x336'
+                'input_resolution': '336x336',
+                'analysis_method': 'consecutive_sequences',
+                'hop_seconds': hop_seconds,
+                'total_sequences_processed': total_sequences
             },
             'overall_result': {
-                'is_fight': is_fight,
-                'confidence': float(confidence),
-                'inference_time': inference_time
+                'is_fight': has_violence,
+                'confidence': float(overall_confidence),
+                'inference_time': display_inference_time,  # First violence inference time
+                'first_violence_inference_time': first_violence_inference_time,  # Explicit field
+                'total_processing_time': total_inference_time,  # Total time for reference
+                'sequences_processed': total_sequences
             },
             'segments': segments,
-            'has_violence': len(segments) > 0,
-            'violence_duration': sum(seg['end'] - seg['start'] for seg in segments) if segments else 0,
-            'violence_percentage': (sum(seg['end'] - seg['start'] for seg in segments) / duration * 100) if segments and duration > 0 else 0
+            'has_violence': has_violence,
+            'violence_duration': violence_duration,
+            'violence_percentage': violence_percentage,
+            'processing_stats': {
+                'total_sequences': total_sequences,
+                'violent_sequences': len(segments),
+                'total_inference_time': total_inference_time,
+                'first_violence_time': first_violence_inference_time,
+                'avg_inference_per_sequence': total_inference_time / total_sequences if total_sequences > 0 else 0
+            }
         }
 
-        # Save events to database
+        # Save events and results (existing code)
         try:
             process_and_save_events(job_id, result, video_path)
         except Exception as e:
             print(f"Error saving events for job {job_id}: {e}")
 
-        # Save result to JSON file
         result_path = os.path.join(RESULTS_FOLDER, f"{job_id}_result.json")
         with open(result_path, 'w') as f:
             json.dump(result, f, indent=2)
 
-        # Update active job and add to history
         active_jobs[job_id]['status'] = 'completed'
         active_jobs[job_id]['progress'] = 100
         active_jobs[job_id]['message'] = 'Processing complete'
         active_jobs[job_id]['result'] = result
 
-        # Add to history
         results_history[job_id] = {
             'job_id': job_id,
             'filename': os.path.basename(video_path),
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'has_violence': len(segments) > 0,
-            'violence_duration': result['violence_duration'],
-            'violence_percentage': result['violence_percentage'],
-            'overall_confidence': float(confidence),
-            'model_type': 'X3D-M',
-            'thumbnail': active_jobs[job_id]['thumbnail']
+            'has_violence': has_violence,
+            'violence_duration': violence_duration,
+            'violence_percentage': violence_percentage,
+            'overall_confidence': float(overall_confidence),
+            'model_type': 'X3D-M (Sequence Analysis)',
+            'thumbnail': active_jobs[job_id]['thumbnail'],
+            'first_violence_inference_time': first_violence_inference_time,
+            'total_sequences': total_sequences
         }
 
-        # Save history to file
         try:
             with open(os.path.join(RESULTS_FOLDER, 'history.json'), 'w') as f:
                 json.dump(list(results_history.values()), f, indent=2)
         except Exception as e:
             print(f"Error saving history: {e}")
 
-        print(f"Processing completed for job {job_id}")
-
     except Exception as e:
         import traceback
         traceback.print_exc()
         active_jobs[job_id]['status'] = 'error'
         active_jobs[job_id]['message'] = f'Error: {str(e)}'
-        print(f"Error processing video {video_path}: {e}")
 
 # API Routes
 @app.get("/")
@@ -2865,9 +2874,13 @@ async def get_stream_event_result(event_id: int):
             'start': event[5],  # start_time
             'end': event[6],    # end_time
             'confidence': float(event[8]),  # confidence
+            'inference_time': metadata_dict.get('detection_interval', 3.0),  # Individual inference time
             'start_formatted': f"{int(event[5]//60)}:{int(event[5]%60):02d}",
             'end_formatted': f"{int(event[6]//60)}:{int(event[6]%60):02d}"
         }]
+        
+        # Extract timing information from metadata
+        detection_interval = metadata_dict.get('detection_interval', 3.0)
         
         # Format result to match ResultsViewer expectations
         result = {
@@ -2878,11 +2891,14 @@ async def get_stream_event_result(event_id: int):
             'video_path': event[10] if event[10] else None,  # clip_path
             'thumbnail': event[9] if event[9] else None,     # thumbnail_path
             
-            # Overall result info
+            # Overall result info with enhanced timing
             'overall_result': {
                 'is_fight': True,
                 'confidence': float(event[8]),
-                'inference_time': metadata_dict.get('detection_interval', 3.0)
+                'inference_time': detection_interval,  # Main inference time (for compatibility)
+                'first_violence_inference_time': detection_interval,  # Same as inference_time for streams
+                'total_processing_time': detection_interval,  # Same for single detection
+                'sequences_processed': 1  # Stream events are single detections
             },
             
             # Segments data
@@ -2894,19 +2910,22 @@ async def get_stream_event_result(event_id: int):
             'metadata': {
                 'duration': duration,
                 'duration_formatted': duration_formatted,
-                'width': 640,  # Default values since we don't store these for streams
-                'height': 480,
-                'fps': 4.0,    # Typical for event clips
-                'frame_count': int(duration * 4),
+                'width': metadata_dict.get('frame_width', 640),  # Default values
+                'height': metadata_dict.get('frame_height', 480),
+                'fps': metadata_dict.get('fps', 4.0),  # Typical for event clips
+                'frame_count': int(duration * metadata_dict.get('fps', 4.0)),
                 'source_type': 'live_stream'
             },
             
-            # Model information
+            # Model information with enhanced fields
             'model_info': {
                 'architecture': 'X3D-M (Live Stream)',
                 'motion_enhancement': metadata_dict.get('motion_enhancement', True),
                 'input_frames': metadata_dict.get('temporal_length', 16),
                 'input_resolution': f"{metadata_dict.get('model_input_size', [336, 336])[0]}x{metadata_dict.get('model_input_size', [336, 336])[1]}",
+                'analysis_method': 'real_time_stream',
+                'hop_seconds': metadata_dict.get('detection_interval', 3.0),
+                'total_sequences_processed': 1,  # Single stream detection
                 'source_stream': stream_name,
                 'stream_id': event[3]
             },
@@ -2919,6 +2938,15 @@ async def get_stream_event_result(event_id: int):
                 'detection_type': 'real_time_monitoring',
                 'event_id': event[0],
                 'pipeline_version': metadata_dict.get('pipeline_version', 'stream_v1')
+            },
+            
+            # Processing statistics (new section for consistency)
+            'processing_stats': {
+                'total_sequences': 1,
+                'violent_sequences': 1,
+                'total_inference_time': detection_interval,
+                'first_violence_time': detection_interval,
+                'avg_inference_per_sequence': detection_interval
             }
         }
         

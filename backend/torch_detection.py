@@ -490,6 +490,67 @@ def test_detection(model_path, video_path, threshold=0.5):
     
     return is_fight, confidence, inference_time
 
+def extract_consecutive_frame_sequences(video_path, sequence_length=16, hop_seconds=2.0):
+    """
+    Extract consecutive frame sequences from video for proper temporal analysis.
+    Mimics RTSPStreamProcessor approach for uploaded videos.
+    """
+    print(f"Extracting consecutive frame sequences from: {video_path}")
+    
+    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video: {video_path}")
+    
+    # Get video properties
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    duration = total_frames / fps if fps > 0 else 0
+    
+    print(f"Video: {total_frames} frames, {fps:.2f} FPS, {duration:.2f}s")
+    
+    # Calculate hop in frames
+    hop_frames = int(hop_seconds * fps)
+    sequences = []
+    timestamps = []
+    
+    start_frame = 0
+    while start_frame + sequence_length <= total_frames:
+        sequence_frames = []
+        
+        for frame_idx in range(start_frame, start_frame + sequence_length):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            
+            if ret:
+                frame = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                sequence_frames.append(frame)
+            else:
+                if sequence_frames:
+                    sequence_frames.append(sequence_frames[-1].copy())
+                else:
+                    sequence_frames.append(np.zeros((INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8))
+        
+        # Ensure exact length
+        while len(sequence_frames) < sequence_length:
+            sequence_frames.append(sequence_frames[-1].copy() if sequence_frames else 
+                                   np.zeros((INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8))
+        
+        sequence_array = np.array(sequence_frames[:sequence_length])
+        sequences.append(sequence_array)
+        
+        start_time = start_frame / fps
+        end_time = (start_frame + sequence_length) / fps
+        timestamps.append((start_time, end_time))
+        
+        start_frame += hop_frames
+    
+    cap.release()
+    print(f"Extracted {len(sequences)} consecutive sequences")
+    return sequences, timestamps
+
 if __name__ == "__main__":
     import argparse
     

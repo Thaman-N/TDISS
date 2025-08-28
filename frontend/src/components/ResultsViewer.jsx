@@ -224,28 +224,31 @@ const ResultsViewer = () => {
     }
   }
 
-  // Create timeline data for visualization
+  // Create timeline data for visualization - FIXED VERSION
   const createTimelineData = () => {
     if (!result?.metadata?.duration) return []
     
     const duration = result.metadata.duration
-    const interval = 10 // 10-second intervals
+    const interval = 1 // 1-second intervals for accurate representation
     const data = []
     
-    for (let time = 0; time < duration; time += interval) {
+    for (let time = 0; time <= duration; time += interval) {
       const segmentData = {
         time: time,
         timeLabel: formatTime(time),
         violence: 0
       }
       
-      // Check if this time intersects with any violence segments
+      // Find all segments that contain this time point
+      let maxConfidence = 0
       result.segments?.forEach(segment => {
-        if (time >= segment.start && time < segment.end) {
-          segmentData.violence = segment.confidence * 100
+        // Check if this time point falls within the segment
+        if (time >= segment.start && time <= segment.end) {
+          maxConfidence = Math.max(maxConfidence, segment.confidence * 100)
         }
       })
       
+      segmentData.violence = maxConfidence
       data.push(segmentData)
     }
     
@@ -371,226 +374,237 @@ const ResultsViewer = () => {
   return (
     <div className="container mx-auto px-4 py-8">
       <style>{`
-  /* Enhanced Results Viewer Animations */
-  .back-button {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-  }
-  .back-button::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-    transition: left 0.5s;
-  }
-  .back-button:hover::before {
-    left: 100%;
-  }
-  .back-button:hover {
-    transform: translateX(-4px) translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
-  }
-  .back-button:hover .back-icon {
-    transform: translateX(-2px);
-  }
-  
-  .action-button {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-  }
-  .action-button::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-    transition: left 0.5s;
-  }
-  .action-button:hover::before {
-    left: 100%;
-  }
-  .action-button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
-  }
-  
-  .result-banner {
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    cursor: default;
-  }
-  .result-banner:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
-  }
-  .result-banner:hover .banner-icon {
-    transform: scale(1.1) rotate(5deg);
-  }
-  .result-banner:hover .banner-badge {
-    transform: scale(1.05);
-  }
-  
-  .video-card {
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-  }
-  .video-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 0;
-    background: linear-gradient(135deg, hsl(var(--primary) / 0.03), transparent);
-    transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .video-card:hover::before {
-    height: 100%;
-  }
-  .video-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
-    border-color: hsl(var(--primary) / 0.2);
-  }
-  
-  .segment-card {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    cursor: pointer;
-    position: relative;
-  }
-  .segment-card::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 0;
-    height: 100%;
-    background: linear-gradient(90deg, hsl(var(--destructive) / 0.1), transparent);
-    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .segment-card:hover::before {
-    width: 100%;
-  }
-  .segment-card:hover {
-    transform: translateX(6px) translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
-    border-color: hsl(var(--destructive) / 0.3);
-  }
-  .segment-card:hover .segment-badge {
-    transform: scale(1.1);
-  }
-  .segment-card:hover .segment-number {
-    transform: scale(1.1);
-    color: hsl(var(--destructive));
-  }
-  
-  .metadata-card {
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    cursor: default;
-    position: relative;
-    overflow: hidden;
-  }
-  .metadata-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 0;
-    height: 100%;
-    background: linear-gradient(270deg, hsl(var(--primary) / 0.05), transparent);
-    transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .metadata-card:hover::before {
-    width: 100%;
-  }
-  .metadata-card:hover {
-    transform: translateY(-4px) scale(1.02);
-    box-shadow: 0 12px 25px rgba(0, 0, 0, 0.1);
-    border-color: hsl(var(--primary) / 0.2);
-  }
-  .metadata-card:hover .card-icon {
-    transform: scale(1.1) rotate(5deg);
-    color: hsl(var(--primary));
-  }
-  
-  /* Quick action buttons fix */
-  .quick-action {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    width: 100%;
-    text-align: left;
-    border: 1px solid hsl(var(--border));
-    padding: 0.75rem;
-    margin: 0.25rem 0;
-  }
-  
-  .quick-action:hover {
-    transform: translateX(6px) translateY(-2px);
-    background: hsl(var(--primary) / 0.05);
-    border-color: hsl(var(--primary) / 0.2);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
-  }
-  
-  .quick-action:hover .action-icon {
-    transform: scale(1.1);
-    color: hsl(var(--primary));
-  }
-  
-  /* Icon animations */
-  .back-icon {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .banner-icon {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .banner-badge {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .segment-badge {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .segment-number {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .card-icon {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .action-icon {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  
-  /* Video container styling */
-  .video-container {
-    position: relative;
-    background: #000;
-    border-radius: 8px;
-    overflow: hidden;
-  }
-  .video-element {
-    width: 100%;
-    height: 100%;
-    border-radius: 8px;
-  }
-  .video-fallback {
-    background: linear-gradient(135deg, #1f2937, #111827);
-    border: 2px dashed #374151;
-    border-radius: 8px;
-  }
-`}</style>
+        /* Enhanced Results Viewer Animations */
+        .back-button {
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          position: relative;
+          overflow: hidden;
+        }
+        .back-button::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: -100%;
+          width: 100%;
+          height: 100%;
+          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+          transition: left 0.5s;
+        }
+        .back-button:hover::before {
+          left: 100%;
+        }
+        .back-button:hover {
+          transform: translateX(-4px) translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+        }
+        .back-button:hover .back-icon {
+          transform: translateX(-2px);
+        }
+        
+        .action-button {
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          position: relative;
+          overflow: hidden;
+        }
+        .action-button::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: -100%;
+          width: 100%;
+          height: 100%;
+          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+          transition: left 0.5s;
+        }
+        .action-button:hover::before {
+          left: 100%;
+        }
+        .action-button:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        .compact-banner {
+          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          cursor: default;
+        }
+        .compact-banner:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 6px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .video-card {
+          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          position: relative;
+          overflow: hidden;
+        }
+        .video-card::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 0;
+          background: linear-gradient(135deg, hsl(var(--primary) / 0.03), transparent);
+          transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .video-card:hover::before {
+          height: 100%;
+        }
+        .video-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 12px 25px rgba(0, 0, 0, 0.08);
+          border-color: hsl(var(--primary) / 0.2);
+        }
+        
+        .segments-sidebar {
+          height: fit-content;
+          max-height: calc(100vh - 200px);
+          position: sticky;
+          top: 20px;
+          min-width: 280px;
+        }
+        
+        .segments-list {
+          max-height: 400px;
+          overflow-y: auto;
+          overflow-x: hidden;
+        }
+        
+        .segments-list::-webkit-scrollbar {
+          width: 6px;
+        }
+        
+        .segments-list::-webkit-scrollbar-track {
+          background: hsl(var(--muted));
+          border-radius: 3px;
+        }
+        
+        .segments-list::-webkit-scrollbar-thumb {
+          background: hsl(var(--muted-foreground) / 0.3);
+          border-radius: 3px;
+        }
+        
+        .segments-list::-webkit-scrollbar-thumb:hover {
+          background: hsl(var(--muted-foreground) / 0.5);
+        }
+        
+        .segment-card {
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          cursor: pointer;
+          position: relative;
+        }
+        .segment-card::before {
+          content: '';
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 0;
+          height: 100%;
+          background: linear-gradient(90deg, hsl(var(--destructive) / 0.1), transparent);
+          transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .segment-card:hover::before {
+          width: 100%;
+        }
+        .segment-card:hover {
+          transform: translateX(6px) translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+          border-color: hsl(var(--destructive) / 0.3);
+        }
+        .segment-card:hover .segment-badge {
+          transform: scale(1.1);
+        }
+        .segment-card:hover .segment-number {
+          transform: scale(1.1);
+          color: hsl(var(--destructive));
+        }
+        
+        .metadata-card {
+          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          cursor: default;
+          position: relative;
+          overflow: hidden;
+          flex: 1;
+        }
+        .metadata-card::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          right: 0;
+          width: 0;
+          height: 100%;
+          background: linear-gradient(270deg, hsl(var(--primary) / 0.05), transparent);
+          transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .metadata-card:hover::before {
+          width: 100%;
+        }
+        .metadata-card:hover {
+          transform: translateY(-3px) scale(1.02);
+          box-shadow: 0 12px 25px rgba(0, 0, 0, 0.1);
+          border-color: hsl(var(--primary) / 0.2);
+        }
+        .metadata-card:hover .card-icon {
+          transform: scale(1.1) rotate(5deg);
+          color: hsl(var(--primary));
+        }
+        
+        /* Icon animations */
+        .back-icon { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .segment-badge { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .segment-number { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .card-icon { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        
+        /* Video container styling */
+        .video-container {
+          position: relative;
+          background: #000;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .video-element {
+          width: 100%;
+          height: 100%;
+          border-radius: 8px;
+        }
+        .video-fallback {
+          background: linear-gradient(135deg, #1f2937, #111827);
+          border: 2px dashed #374151;
+          border-radius: 8px;
+        }
+        .quick-action {
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          position: relative;
+          overflow: hidden;
+          display: flex;
+          align-items: center;
+          width: 100%;
+          text-align: left;
+          border: 1px solid hsl(var(--border));
+          padding: 0.75rem;
+          margin: 0.25rem 0;
+        }
 
-      
+        .quick-action:hover {
+          transform: translateX(6px) translateY(-2px);
+          background: hsl(var(--primary) / 0.05);
+          border-color: hsl(var(--primary) / 0.2);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .quick-action:hover .action-icon {
+          transform: scale(1.1);
+          color: hsl(var(--primary));
+        }
+
+        .action-icon { 
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+        }
+      `}</style>
+
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-4">
           <Button variant="outline" onClick={() => navigate(getBackDestination())} className="back-button">
             <ArrowLeft className="h-4 w-4 mr-2 back-icon" />
@@ -626,38 +640,11 @@ const ResultsViewer = () => {
         </div>
       </div>
 
-      {/* Overall Result Banner */}
-      <Card className={`mb-8 result-banner ${result.has_violence ? 'border-red-200 bg-red-50 dark:bg-red-950/20' : 'border-green-200 bg-green-50 dark:bg-green-950/20'}`}>
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              {result.has_violence ? (
-                <AlertTriangle className="h-8 w-8 text-red-500 banner-icon" />
-              ) : (
-                <CheckCircle className="h-8 w-8 text-green-500 banner-icon" />
-              )}
-              <div>
-                <h2 className="text-2xl font-bold">
-                  {result.has_violence ? 'Violence Detected' : 'No Violence Detected'}
-                </h2>
-                <p className="text-muted-foreground">
-                  Overall confidence: {(result.overall_result.confidence * 100).toFixed(1)}%
-                </p>
-              </div>
-            </div>
-            
-            <div className="text-right">
-              <Badge 
-                variant={result.has_violence ? 'destructive' : 'default'}
-                className="text-lg px-4 py-2 banner-badge"
-              >
-                {result.has_violence ? 'VIOLENT' : 'SAFE'}
-              </Badge>
-            </div>
-          </div>
-          
+      {/* Compact Result Banner */}
+      <Card className="mb-6 compact-banner">
+        <CardContent className="pt-4">
           {result.has_violence && (
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="text-center">
                 <div className="text-2xl font-bold text-red-600">
                   {result.segments?.length || 0}
@@ -678,12 +665,21 @@ const ResultsViewer = () => {
               </div>
             </div>
           )}
+          {!result.has_violence && (
+            <div className="text-center">
+              <div className="flex items-center justify-center space-x-2">
+                <CheckCircle className="h-6 w-6 text-green-500" />
+                <span className="text-lg font-semibold text-green-600">No Violence Detected</span>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Video Player and Timeline */}
-        <div className="lg:col-span-2 space-y-6">
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Left Column - Video Player and Timeline */}
+        <div className="lg:col-span-3 space-y-6">
           {/* Video Player */}
           <Card className="video-card">
             <CardHeader>
@@ -694,7 +690,7 @@ const ResultsViewer = () => {
               <CardDescription>
                 {videoUrl ? (
                   <div>
-                    <div>Click on segments below to jump to specific times</div>
+                    <div>Click on segments to jump to specific times</div>
                     <div className="text-xs text-muted-foreground mt-1">
                       Video URL: <code>{videoUrl}</code>
                       <Button 
@@ -806,189 +802,211 @@ const ResultsViewer = () => {
               </CardContent>
             </Card>
           )}
+        </div>
 
-          {/* Violent Segments */}
-          {result.segments && result.segments.length > 0 && (
-            <Card className="video-card">
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Target className="h-5 w-5 mr-2" />
-                  Detected Segments
-                </CardTitle>
-                <CardDescription>
-                  Click on any segment to jump to that time in the video
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
+        {/* Right Sidebar - Detected Segments */}
+        <div className="lg:col-span-1">
+          <Card className="segments-sidebar">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Target className="h-5 w-5 mr-2" />
+                Detected Segments
+              </CardTitle>
+              <CardDescription>
+                {result.segments && result.segments.length > 0 
+                  ? `${result.segments.length} violent segment${result.segments.length > 1 ? 's' : ''} found`
+                  : 'No violent segments detected'
+                }
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {result.segments && result.segments.length > 0 ? (
+                <div className="segments-list space-y-3">
                   {result.segments.map((segment, index) => (
                     <div 
                       key={index}
-                      className="flex items-center justify-between p-3 border rounded-lg segment-card"
+                      className="flex items-center justify-between p-2.5 border rounded-lg segment-card"
                       onClick={() => jumpToTime(segment.start)}
                     >
-                      <div className="flex items-center space-x-3">
-                        <Badge variant="outline" className="segment-number">#{index + 1}</Badge>
-                        <div>
-                          <div className="font-medium">
+                      <div className="flex items-center space-x-2 min-w-0 flex-1">
+                        <Badge variant="outline" className="segment-number flex-shrink-0 text-xs">#{index + 1}</Badge>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-xs truncate">
                             {segment.start_formatted} - {segment.end_formatted}
                           </div>
-                          <div className="text-sm text-muted-foreground">
-                            Duration: {formatTime(segment.end - segment.start)}
+                          <div className="text-xs text-muted-foreground truncate">
+                            {formatTime(segment.end - segment.start)}
                           </div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <Badge variant="destructive" className="segment-badge">
-                          {(segment.confidence * 100).toFixed(1)}%
-                        </Badge>
-                      </div>
+                      <Badge variant="destructive" className="segment-badge text-xs flex-shrink-0 ml-2">
+                        {(segment.confidence * 100).toFixed(1)}%
+                      </Badge>
                     </div>
                   ))}
                 </div>
-              </CardContent>
-            </Card>
-          )}
+              ) : (
+                <div className="text-center py-8">
+                  <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-3" />
+                  <p className="text-sm text-muted-foreground">
+                    No violent segments detected in this video
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
+      </div>
 
-        {/* Metadata and Analysis Details */}
-        <div className="space-y-6">
-          {/* Video Metadata */}
-          <Card className="metadata-card">
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <Info className="h-5 w-5 mr-2 card-icon" />
-                Video Details
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Duration:</span>
-                <span className="font-medium">{result.metadata?.duration_formatted || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Resolution:</span>
-                <span className="font-medium">
-                  {result.metadata?.width && result.metadata?.height 
-                    ? `${result.metadata.width}x${result.metadata.height}` 
-                    : 'N/A'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Frame Rate:</span>
-                <span className="font-medium">
-                  {result.metadata?.fps ? `${result.metadata.fps.toFixed(1)} fps` : 'N/A'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Total Frames:</span>
-                <span className="font-medium">
-                  {result.metadata?.frame_count ? result.metadata.frame_count.toLocaleString() : 'N/A'}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
+      {/* Bottom Metadata Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-8">
+        {/* Video Metadata */}
+        <Card className="metadata-card">
+          <CardHeader>
+            <CardTitle className="flex items-center text-lg">
+              <Info className="h-5 w-5 mr-2 card-icon" />
+              Video Details
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Duration:</span>
+              <span className="font-medium text-sm">{result.metadata?.duration_formatted || 'N/A'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Resolution:</span>
+              <span className="font-medium text-sm">
+                {result.metadata?.width && result.metadata?.height 
+                  ? `${result.metadata.width}x${result.metadata.height}` 
+                  : 'N/A'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Frame Rate:</span>
+              <span className="font-medium text-sm">
+                {result.metadata?.fps ? `${result.metadata.fps.toFixed(1)} fps` : 'N/A'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Total Frames:</span>
+              <span className="font-medium text-sm">
+                {result.metadata?.frame_count ? result.metadata.frame_count.toLocaleString() : 'N/A'}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
 
-          {/* Model Information */}
-          <Card className="metadata-card">
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <Brain className="h-5 w-5 mr-2 card-icon" />
-                Model Details
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Architecture:</span>
-                <span className="font-medium">{result.model_info?.architecture || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Input Frames:</span>
-                <span className="font-medium">{result.model_info?.input_frames || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Resolution:</span>
-                <span className="font-medium">{result.model_info?.input_resolution || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Motion Enhancement:</span>
-                <Badge variant={result.model_info?.motion_enhancement ? 'default' : 'outline'}>
-                  {result.model_info?.motion_enhancement ? 'Enabled' : 'Disabled'}
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
+        {/* Model Information */}
+        <Card className="metadata-card">
+          <CardHeader>
+            <CardTitle className="flex items-center text-lg">
+              <Brain className="h-5 w-5 mr-2 card-icon" />
+              Model Details
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Architecture:</span>
+              <span className="font-medium text-sm">{result.model_info?.architecture || 'N/A'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Input Frames:</span>
+              <span className="font-medium text-sm">{result.model_info?.input_frames || 'N/A'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Resolution:</span>
+              <span className="font-medium text-sm">{result.model_info?.input_resolution || 'N/A'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Motion Enhancement:</span>
+              <Badge variant={result.model_info?.motion_enhancement ? 'default' : 'outline'} className="text-xs">
+                {result.model_info?.motion_enhancement ? 'Enabled' : 'Disabled'}
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
 
-          {/* Performance Metrics */}
-          <Card className="metadata-card">
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <Zap className="h-5 w-5 mr-2 card-icon" />
-                Performance
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Inference Time:</span>
-                <span className="font-medium">
-                  {result.overall_result?.inference_time 
-                    ? `${result.overall_result.inference_time.toFixed(3)}s`
-                    : 'N/A'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Processing Speed:</span>
-                <span className="font-medium">
-                  {result.metadata?.duration && result.overall_result?.inference_time 
-                    ? `${(result.metadata.duration / result.overall_result.inference_time).toFixed(1)}x`
-                    : 'N/A'
+        {/* Performance Metrics */}
+        <Card className="metadata-card">
+          <CardHeader>
+            <CardTitle className="flex items-center text-lg">
+              <Zap className="h-5 w-5 mr-2 card-icon" />
+              Performance
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Inference Time:</span>
+              <span className="font-medium text-sm">
+                {result.overall_result?.inference_time 
+                  ? `${result.overall_result.inference_time.toFixed(3)}s`
+                  : 'N/A'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Processing Speed:</span>
+              <span className="font-medium text-sm">
+                {result.metadata?.duration && result.overall_result?.inference_time 
+                  ? `${(result.metadata.duration / result.overall_result.inference_time).toFixed(1)}x`
+                  : 'N/A'
                   }
-                </span>
-              </div>
-            </CardContent>
-          </Card>
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground text-sm">Confidence:</span>
+              <span className="font-medium text-sm">
+                {result.overall_result?.confidence
+                  ? `${(result.overall_result.confidence * 100).toFixed(1)}%`
+                  : 'N/A'}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
 
-          {/* Quick Actions */}
-          <Card className="metadata-card">
-            <CardHeader>
-              <CardTitle>Quick Actions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Button 
-                variant="outline" 
-                className="w-full justify-start quick-action"
-                onClick={() => copyToClipboard(result.job_id)}
-              >
-                <Copy className="h-4 w-4 mr-2 action-icon" />
-                Copy Job ID
-              </Button>
-              <Button 
-                variant="outline" 
-                className="w-full justify-start quick-action"
-                onClick={downloadReport}
-              >
-                <Download className="h-4 w-4 mr-2 action-icon" />
-                Export Results
-              </Button>
-              <Button 
-                variant="outline" 
-                className="w-full justify-start quick-action"
-                onClick={() => navigate('/upload')}
-              >
-                <Upload className="h-4 w-4 mr-2 action-icon" />
-                Analyze Another Video
-              </Button>
-              <Button 
-                variant="outline" 
-                className="w-full justify-start quick-action"
-                onClick={() => copyToClipboard(window.location.href)}
-              >
-                <Share2 className="h-4 w-4 mr-2 action-icon" />
-                Copy Results Link
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
+        {/* Quick Actions */}
+        <Card className="metadata-card">
+          <CardHeader>
+            <CardTitle className="text-lg">Quick Actions</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Button 
+              variant="outline" 
+              size="sm"
+              className="w-full justify-start quick-action"
+              onClick={() => copyToClipboard(result.job_id)}
+            >
+              <Copy className="h-4 w-4 mr-2 action-icon" />
+              Copy Job ID
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm"
+              className="w-full justify-start quick-action"
+              onClick={downloadReport}
+            >
+              <Download className="h-4 w-4 mr-2 action-icon" />
+              Export Results
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm"
+              className="w-full justify-start quick-action"
+              onClick={() => navigate('/upload')}
+            >
+              <Upload className="h-4 w-4 mr-2 action-icon" />
+              Analyze Another Video
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm"
+              className="w-full justify-start quick-action"
+              onClick={() => copyToClipboard(window.location.href)}
+            >
+              <Share2 className="h-4 w-4 mr-2 action-icon" />
+              Copy Results Link
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     </div>
   )
