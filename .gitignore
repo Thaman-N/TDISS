@@ -21,7 +21,8 @@ tp*/
 *model*.pth
 *.pt
 *.json
-
+.claude/
+CLAUDE.md
 
 # System files
 .DS_Store

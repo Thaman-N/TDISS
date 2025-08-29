@@ -83,6 +83,7 @@ npm install
 3. **Add your PyTorch model**
 
 ```bash
+#ignore if you want to use the one in the repo
 cp /path/to/your/model.pth .
 ```
 

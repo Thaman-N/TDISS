@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import ReactPlayer from 'react-player'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -62,35 +61,37 @@ import {
   Copy,
   Brain
 } from 'lucide-react'
-  // Helper function for relative time
-  const getRelativeTime = (date) => {
-    const now = new Date()
-    const diffMs = now - new Date(date)
-    const diffSecs = Math.floor(diffMs / 1000)
-    const diffMins = Math.floor(diffSecs / 60)
-    const diffHours = Math.floor(diffMins / 60)
-    const diffDays = Math.floor(diffHours / 24)
 
-    if (diffSecs < 60) return 'just now'
-    if (diffMins < 60) return `${diffMins}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    return `${diffDays}d ago`
-  }
+// Helper function for relative time
+const getRelativeTime = (date) => {
+  const now = new Date()
+  const diffMs = now - new Date(date)
+  const diffSecs = Math.floor(diffMs / 1000)
+  const diffMins = Math.floor(diffSecs / 60)
+  const diffHours = Math.floor(diffMins / 60)
+  const diffDays = Math.floor(diffHours / 24)
 
-  // Helper function for formatting dates
-  const formatDate = (date, options = {}) => {
-    return new Date(date).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      ...options
-    })
-  }
+  if (diffSecs < 60) return 'just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  if (diffHours < 24) return `${diffHours}h ago`
+  return `${diffDays}d ago`
+}
+
+// Helper function for formatting dates
+const formatDate = (date, options = {}) => {
+  return new Date(date).toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    ...options
+  })
+}
 
 const LiveStreamDashboard = () => {
+  const navigate = useNavigate()
   const { isConnected: wsConnected, registerJobUpdateCallback } = useWebSocket()
   const [activeTab, setActiveTab] = useState('streams')
   const [streams, setStreams] = useState([])
@@ -98,8 +99,6 @@ const LiveStreamDashboard = () => {
   const [loading, setLoading] = useState(true)
   const [eventsLoading, setEventsLoading] = useState(false)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
-  const [eventDialogOpen, setEventDialogOpen] = useState(false)
-  const [selectedEvent, setSelectedEvent] = useState(null)
   const [newStreamName, setNewStreamName] = useState('')
   const [newStreamUrl, setNewStreamUrl] = useState('')
   const [gridLayout, setGridLayout] = useState('2x2')
@@ -226,7 +225,6 @@ const LiveStreamDashboard = () => {
     if (data.type === 'stream_frame' && data.stream_id) {
       const streamId = data.stream_id
       
-      // Update frame data
       setStreamFrames(prev => ({
         ...prev,
         [streamId]: {
@@ -235,7 +233,6 @@ const LiveStreamDashboard = () => {
         }
       }))
       
-      // Clear previous timeout and set new one
       if (frameUpdateRefs.current[streamId]) {
         clearTimeout(frameUpdateRefs.current[streamId])
       }
@@ -246,24 +243,69 @@ const LiveStreamDashboard = () => {
           delete updated[streamId]
           return updated
         })
-      }, 5000) // Clear frame if no update for 5 seconds
+      }, 5000)
     }
     
-    // If it's a violence detection event, refresh events
+    // Fix: Only refresh events if user is NOT actively viewing events tab
+    // or if it's been more than 10 seconds since last refresh
     if (data.type === 'violence_detected') {
-      fetchStreamEvents()
+      const now = Date.now()
+      const lastRefresh = localStorage.getItem('lastEventRefresh') || 0
+      const shouldRefresh = (activeTab !== 'events') || (now - parseInt(lastRefresh) > 10000)
+      
+      if (shouldRefresh) {
+        setTimeout(() => {
+          fetchStreamEvents()
+          localStorage.setItem('lastEventRefresh', now.toString())
+        }, 1000) // Small delay to avoid spam
+      }
+      
+      // Determine button action based on incident status
+      const isOngoingIncident = data.is_ongoing_incident || data.incident_status === 'active'
+      const buttonLabel = isOngoingIncident ? 'View Stream' : 'View Event'
+      const buttonAction = () => {
+        if (isOngoingIncident) {
+          // Navigate to live stream fullscreen for ongoing incidents
+          navigate(`/stream-fullscreen/${data.stream_id}`)
+        } else {
+          // Switch to events tab for completed incidents
+          setActiveTab('events')
+          setTimeout(() => {
+            fetchStreamEvents()
+          }, 200)
+        }
+      }
+      
       toast.warning('Violence detected!', {
-        description: `Stream: ${data.stream_name}`,
+        description: `Stream: ${data.stream_name}${isOngoingIncident ? ' (Ongoing)' : ''}`,
         action: {
-          label: 'View Event',
-          onClick: () => {
-            // Auto-switch to events tab and highlight the event
-            document.querySelector('[data-value="events"]')?.click()
-          }
+          label: buttonLabel,
+          onClick: buttonAction
         }
       })
     }
-  }, [fetchStreamEvents])
+    
+    // Handle incident finalization notifications
+    if (data.type === 'incident_finalized') {
+      toast.success('Incident Analysis Complete', {
+        description: `${data.stream_name}: ${data.detection_count} detections, ${data.total_duration.toFixed(1)}s duration`,
+        action: {
+          label: 'View Analysis',
+          onClick: () => {
+            // Navigate to the first event in the incident for analysis
+            if (data.event_ids && data.event_ids.length > 0) {
+              navigate(`/results/stream-event-${data.event_ids[0]}`)
+            }
+          }
+        }
+      })
+      
+      // Refresh events list
+      if (activeTab === 'events') {
+        fetchStreamEvents()
+      }
+    }
+  }, [fetchStreamEvents, activeTab])
 
   const addStream = async () => {
     if (!newStreamName.trim() || !newStreamUrl.trim()) {
@@ -385,9 +427,9 @@ const LiveStreamDashboard = () => {
     window.open(fullScreenUrl, '_blank', 'width=1280,height=720,scrollbars=no,resizable=yes')
   }
 
-  const viewEvent = (event) => {
-    setSelectedEvent(event)
-    setEventDialogOpen(true)
+  // Direct navigation to results - no more dialog
+  const viewEventAnalysis = (event) => {
+    navigate(`/results/stream-event-${event.id}`)
   }
 
   const downloadEventClip = async (event) => {
@@ -768,13 +810,14 @@ const LiveStreamDashboard = () => {
             </div>
             
             <div className="flex items-center space-x-2 ml-4">
+              {/* Direct navigation to results - no dialog */}
               <Button
-                variant="outline"
+                variant="default"
                 size="sm"
-                onClick={() => viewEvent(event)}
+                onClick={() => viewEventAnalysis(event)}
               >
-                <PlayCircle className="h-4 w-4 mr-1" />
-                View
+                <Eye className="h-4 w-4 mr-1" />
+                View Analysis
               </Button>
               
               <Button
@@ -799,7 +842,7 @@ const LiveStreamDashboard = () => {
                     src={event.thumbnail_path} 
                     alt="Event thumbnail"
                     className="w-32 h-24 object-cover rounded border cursor-pointer hover:opacity-80 transition-opacity"
-                    onClick={() => viewEvent(event)}
+                    onClick={() => viewEventAnalysis(event)}
                   />
                 </div>
               )}
@@ -823,8 +866,17 @@ const LiveStreamDashboard = () => {
                 </div>
               </div>
               
-              {event.clip_path && (
-                <div className="flex justify-center pt-2">
+              <div className="flex justify-center space-x-2 pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => viewEventAnalysis(event)}
+                >
+                  <Eye className="h-4 w-4 mr-2" />
+                  Full Analysis
+                </Button>
+                
+                {event.clip_path && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -833,243 +885,12 @@ const LiveStreamDashboard = () => {
                     <Download className="h-4 w-4 mr-2" />
                     Download Clip
                   </Button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           )}
         </CardContent>
       </Card>
-    )
-  }
-
-  const EventDialog = () => {
-    if (!selectedEvent) return null
-    
-    return (
-      <Dialog open={eventDialogOpen} onOpenChange={setEventDialogOpen}>
-        <DialogContent className="max-w-4xl bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/95">
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-between">
-              <span>Violence Event Details</span>
-              <div className="flex items-center space-x-2">
-                <Badge variant="destructive" className="text-xs">
-                  Live Stream Event
-                </Badge>
-                <Badge variant="outline" className={`text-xs ${getConfidenceColor(selectedEvent.confidence)}`}>
-                  {(selectedEvent.confidence * 100).toFixed(1)}%
-                </Badge>
-              </div>
-            </DialogTitle>
-            <DialogDescription>
-              Event from {formatDate(selectedEvent.timestamp)} â€¢ Stream: {selectedEvent.filename}
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Enhanced Video Section */}
-            <div className="space-y-4">
-              {/* Thumbnail */}
-              {selectedEvent.thumbnail_path && (
-                <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-                  <img 
-                    src={selectedEvent.thumbnail_path} 
-                    alt="Event frame"
-                    className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity"
-                    onClick={() => {
-                      // Optional: click to view in full ResultsViewer
-                      setEventDialogOpen(false)
-                      navigate(`/results/stream-event-${selectedEvent.id}`)
-                    }}
-                  />
-                  <div className="absolute top-2 left-2 bg-red-500 text-white px-2 py-1 rounded text-xs font-semibold">
-                    INCIDENT DETECTED
-                  </div>
-                  <div className="absolute bottom-2 right-2 bg-black/70 text-white px-2 py-1 rounded text-xs">
-                    Click for Full Analysis
-                  </div>
-                </div>
-              )}
-              
-              {/* Enhanced Video Player */}
-              {selectedEvent.clip_path && (
-                <div className="space-y-2">
-                  <h4 className="font-medium flex items-center">
-                    <PlayCircle className="h-4 w-4 mr-1" />
-                    Event Clip ({selectedEvent.duration?.toFixed(1)}s)
-                  </h4>
-                  <div className="aspect-video bg-black rounded-lg overflow-hidden">
-                    <ReactPlayer
-                      url={selectedEvent.clip_path}
-                      width="100%"
-                      height="100%"
-                      controls={true}
-                      playing={false}
-                      loop={true}
-                      config={{
-                        file: {
-                          attributes: {
-                            crossOrigin: 'anonymous'
-                          }
-                        }
-                      }}
-                      onError={(error) => {
-                        console.error('Event clip playback error:', error)
-                        toast.error('Clip playback failed')
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
-              
-              {/* No clip fallback */}
-              {!selectedEvent.clip_path && !selectedEvent.thumbnail_path && (
-                <div className="aspect-video bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-center">
-                  <div className="text-center">
-                    <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No media available for this event</p>
-                  </div>
-                </div>
-              )}
-            </div>
-            
-            {/* Enhanced Metadata Section */}
-            <div className="space-y-4">
-              {/* Quick Stats */}
-              <div className="grid grid-cols-2 gap-4">
-                <Card className="p-3">
-                  <div className="text-center">
-                    <div className={`text-2xl font-bold ${getConfidenceColor(selectedEvent.confidence)}`}>
-                      {(selectedEvent.confidence * 100).toFixed(1)}%
-                    </div>
-                    <div className="text-xs text-muted-foreground">Confidence</div>
-                  </div>
-                </Card>
-                <Card className="p-3">
-                  <div className="text-center">
-                    <div className="text-2xl font-bold text-red-600">
-                      {selectedEvent.duration?.toFixed(1)}s
-                    </div>
-                    <div className="text-xs text-muted-foreground">Duration</div>
-                  </div>
-                </Card>
-              </div>
-              
-              {/* Stream Information */}
-              <Card className="p-4">
-                <h4 className="font-medium mb-3 flex items-center">
-                  <Camera className="h-4 w-4 mr-1" />
-                  Stream Information
-                </h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Stream:</span>
-                    <span className="font-medium">{selectedEvent.filename}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Source ID:</span>
-                    <span className="font-medium">{selectedEvent.source_id}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Type:</span>
-                    <span className="font-medium">{selectedEvent.source_type}</span>
-                  </div>
-                </div>
-              </Card>
-              
-              {/* Timing Information */}
-              <Card className="p-4">
-                <h4 className="font-medium mb-3 flex items-center">
-                  <Clock className="h-4 w-4 mr-1" />
-                  Timing Details
-                </h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Detected:</span>
-                    <span className="font-medium">{formatDate(selectedEvent.timestamp)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Start:</span>
-                    <span className="font-medium">{selectedEvent.start_time?.toFixed(1)}s</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">End:</span>
-                    <span className="font-medium">{selectedEvent.end_time?.toFixed(1)}s</span>
-                  </div>
-                </div>
-              </Card>
-
-              {/* AI Analysis Info */}
-              <Card className="p-4">
-                <h4 className="font-medium mb-3 flex items-center">
-                  <Brain className="h-4 w-4 mr-1" />
-                  Analysis Details
-                </h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Model:</span>
-                    <span className="font-medium">X3D-S Live Stream</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Detection Type:</span>
-                    <span className="font-medium">Real-time Violence Detection</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Processing:</span>
-                    <span className="font-medium">16-frame temporal analysis</span>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          </div>
-          
-          <DialogFooter className="flex-col sm:flex-row gap-2">
-            {/* Primary Actions */}
-            <div className="flex gap-2 flex-1">
-              {/* New: View Full Analysis Button - Most Important */}
-              <Button 
-                onClick={() => {
-                  setEventDialogOpen(false)
-                  navigate(`/results/stream-event-${selectedEvent.id}`)
-                }}
-                className="flex-1 sm:flex-none"
-              >
-                <Eye className="h-4 w-4 mr-2" />
-                Full Analysis
-              </Button>
-              
-              {selectedEvent.clip_path && (
-                <Button 
-                  variant="outline"
-                  onClick={() => downloadEventClip(selectedEvent)} 
-                  className="flex-1 sm:flex-none"
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Download Clip
-                </Button>
-              )}
-            </div>
-            
-            {/* Secondary Actions */}
-            <div className="flex gap-2">
-              <Button 
-                variant="outline" 
-                size="sm"
-                onClick={() => {
-                  navigator.clipboard.writeText(`Event ID: ${selectedEvent.id}`)
-                  toast.success('Event ID copied')
-                }}
-              >
-                <Copy className="h-4 w-4 mr-1" />
-                Copy ID
-              </Button>
-              
-              <Button variant="outline" onClick={() => setEventDialogOpen(false)}>
-                Close
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     )
   }
 
@@ -1544,9 +1365,6 @@ const LiveStreamDashboard = () => {
           )}
         </TabsContent>
       </Tabs>
-
-      {/* Event Detail Dialog */}
-      <EventDialog />
     </div>
   )
 }

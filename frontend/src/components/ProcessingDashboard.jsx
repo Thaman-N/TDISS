@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -39,23 +39,35 @@ const ProcessingDashboard = () => {
   const [jobs, setJobs] = useState([])
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
+  const [jobsLoading, setJobsLoading] = useState(false)
+  
+  // Track which jobs have been updated to avoid unnecessary re-renders
+  const jobUpdateTimestamps = useRef({})
+  const refreshTimeoutRef = useRef(null)
 
   // Highlighted job from URL params
   const highlightedJobId = searchParams.get('job')
 
-  const fetchJobs = useCallback(async () => {
+  const fetchJobs = useCallback(async (showLoading = true) => {
+    if (showLoading) setJobsLoading(true)
     try {
       const response = await fetch('/api/jobs')
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
       const data = await response.json()
+      
+      // Update jobs with proper ordering (backend now handles this)
       setJobs(data || [])
     } catch (error) {
       console.error('Failed to fetch jobs:', error)
-      toast.error('Failed to load jobs', {
-        description: error.message
-      })
+      if (showLoading) {
+        toast.error('Failed to load jobs', {
+          description: error.message
+        })
+      }
+    } finally {
+      if (showLoading) setJobsLoading(false)
     }
   }, [])
 
@@ -75,41 +87,55 @@ const ProcessingDashboard = () => {
     }
   }, [])
 
-  useEffect(() => {
-    const loadData = async () => {
-      setLoading(true)
-      await Promise.all([fetchJobs(), fetchHistory()])
-      setLoading(false)
+  // Optimized job update handler
+  const handleJobUpdate = useCallback((jobId, jobData) => {
+    const now = Date.now()
+    const lastUpdate = jobUpdateTimestamps.current[jobId] || 0
+    
+    // Throttle updates to avoid excessive re-renders (min 500ms between updates)
+    if (now - lastUpdate < 500) {
+      return
     }
     
-    loadData()
-  }, [fetchJobs, fetchHistory])
+    jobUpdateTimestamps.current[jobId] = now
 
-  useEffect(() => {
-    // Register for job updates via WebSocket
-    const unregister = registerJobUpdateCallback(handleJobUpdate)
-    
-    return unregister
-  }, [registerJobUpdateCallback])
-
-  const handleJobUpdate = useCallback((jobId, jobData) => {
     setJobs(prevJobs => {
       const existingJobIndex = prevJobs.findIndex(job => job.id === jobId)
       
       if (existingJobIndex >= 0) {
-        // Update existing job
+        // Update existing job without re-rendering the entire list
         const updatedJobs = [...prevJobs]
-        updatedJobs[existingJobIndex] = { ...updatedJobs[existingJobIndex], ...jobData }
-        return updatedJobs
+        const existingJob = updatedJobs[existingJobIndex]
+        
+        // Only update if there are actual changes
+        const hasChanges = 
+          existingJob.status !== jobData.status ||
+          existingJob.progress !== jobData.progress ||
+          existingJob.message !== jobData.message
+        
+        if (hasChanges) {
+          updatedJobs[existingJobIndex] = { 
+            ...existingJob, 
+            ...jobData,
+            // Ensure we keep the original timestamp for ordering
+            timestamp: existingJob.timestamp || jobData.timestamp
+          }
+          return updatedJobs
+        }
+        return prevJobs // No changes, don't trigger re-render
       } else {
-        // Add new job
-        return [...prevJobs, { id: jobId, ...jobData }]
+        // Add new job at the beginning (most recent first)
+        return [{ id: jobId, ...jobData }, ...prevJobs]
       }
     })
 
-    // If job completed, refresh history
+    // Handle completion/error notifications
     if (jobData.status === 'completed') {
-      fetchHistory()
+      // Refresh history after a brief delay
+      setTimeout(() => {
+        fetchHistory()
+      }, 1000)
+      
       toast.success('Analysis complete!', {
         description: `${jobData.filename} has been processed`,
         action: {
@@ -123,6 +149,39 @@ const ProcessingDashboard = () => {
       })
     }
   }, [navigate, fetchHistory])
+
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true)
+      await Promise.all([fetchJobs(false), fetchHistory()])
+      setLoading(false)
+    }
+    
+    loadData()
+  }, [fetchJobs, fetchHistory])
+
+  useEffect(() => {
+    // Register for job updates via WebSocket
+    const unregister = registerJobUpdateCallback(handleJobUpdate)
+    
+    return unregister
+  }, [registerJobUpdateCallback, handleJobUpdate])
+
+  // Periodic refresh for active jobs (every 10 seconds)
+  useEffect(() => {
+    const refreshActiveJobs = () => {
+      const hasActiveJobs = jobs.some(job => ['queued', 'processing'].includes(job.status))
+      if (hasActiveJobs && wsConnected) {
+        // Only refresh jobs, not history
+        fetchJobs(false)
+      }
+    }
+
+    // Set up periodic refresh
+    const interval = setInterval(refreshActiveJobs, 10000)
+    
+    return () => clearInterval(interval)
+  }, [jobs, wsConnected, fetchJobs])
 
   const getStatusIcon = (status) => {
     switch (status) {
@@ -161,10 +220,16 @@ const ProcessingDashboard = () => {
   }
 
   const handleRefresh = useCallback(async () => {
+    // Clear any existing timeout
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current)
+    }
+    
     await Promise.all([fetchJobs(), fetchHistory()])
   }, [fetchJobs, fetchHistory])
 
-  const JobCard = ({ job, isHighlighted = false }) => (
+  // Memoized JobCard to prevent unnecessary re-renders
+  const JobCard = React.memo(({ job, isHighlighted = false }) => (
     <Card className={`${isHighlighted ? 'ring-2 ring-primary highlighted-card' : ''} job-card transition-all hover:shadow-md`}>
       <style>{`
         .job-card {
@@ -322,9 +387,10 @@ const ProcessingDashboard = () => {
         )}
       </CardContent>
     </Card>
-  )
+  ))
 
-  const HistoryCard = ({ item }) => (
+  // Memoized HistoryCard to prevent unnecessary re-renders
+  const HistoryCard = React.memo(({ item }) => (
     <Card className="history-card cursor-pointer" 
           onClick={() => navigate(`/results/${item.job_id}`)}>
       <style>{`
@@ -410,7 +476,7 @@ const ProcessingDashboard = () => {
         </div>
       </CardContent>
     </Card>
-  )
+  ))
 
   if (loading) {
     return (
@@ -449,10 +515,6 @@ const ProcessingDashboard = () => {
           box-shadow: 0 12px 25px rgba(0, 0, 0, 0.1);
           border-color: hsl(var(--primary) / 0.2);
         }
-        // .stat-card:hover .stat-value {
-        //   transform: scale(1.1);
-        //   color: hsl(var(--primary));
-        // }
         
         .connection-badge {
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -556,8 +618,13 @@ const ProcessingDashboard = () => {
             {wsConnected ? 'Live Updates' : 'Disconnected'}
           </div>
           
-          <Button variant="outline" onClick={handleRefresh} className="refresh-button">
-            <RefreshCw className="h-4 w-4 mr-2 refresh-icon" />
+          <Button 
+            variant="outline" 
+            onClick={handleRefresh} 
+            className="refresh-button"
+            disabled={jobsLoading}
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 refresh-icon ${jobsLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </div>

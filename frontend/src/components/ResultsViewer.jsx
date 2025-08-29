@@ -259,13 +259,24 @@ const ResultsViewer = () => {
   const getVideoUrl = () => {
     if (!result) return null
     
-    console.log('Result video_path:', result.video_path)
+    console.log('Result data:', { 
+      video_path: result.video_path, 
+      clip_path: result.clip_path, 
+      source_type: result.source_type,
+      incident_status: result.incident_status 
+    })
     
-    // For uploaded videos, construct the API endpoint
+    // Priority 1: Check clip_path first (for both uploads and streams)
+    if (result.clip_path) {
+      console.log('Using clip_path:', result.clip_path)
+      return result.clip_path
+    }
+    
+    // Priority 2: For uploaded videos, construct the API endpoint
     if (result.video_path) {
       // Check if it's already a URL
       if (result.video_path.startsWith('http') || result.video_path.startsWith('/api')) {
-        console.log('Using direct URL:', result.video_path)
+        console.log('Using direct video_path URL:', result.video_path)
         return result.video_path
       } else {
         // Extract filename from path - handle both Windows and Unix paths
@@ -278,13 +289,7 @@ const ResultsViewer = () => {
       }
     }
     
-    // For stream events, check clip_path
-    if (result.clip_path) {
-      console.log('Using clip_path:', result.clip_path)
-      return result.clip_path
-    }
-    
-    console.log('No video URL found')
+    console.log('No video URL found - result may be incomplete')
     return null
   }
 
@@ -299,14 +304,23 @@ const ResultsViewer = () => {
     setVideoLoading(false)
     setVideoError(false)
     console.log('Video can play')
-    toast.success('Video loaded successfully')
+    // toast.success('Video loaded successfully')
   }
 
   const handleVideoError = (e) => {
     setVideoLoading(false)
     setVideoError(true)
-    console.error('Video error:', e.target.error)
-    toast.error('Failed to load video')
+    const error = e.target?.error
+    console.error('Video error:', error)
+    
+    // More informative error handling
+    if (error) {
+      const errorMsg = `Video error (${error.code}): ${error.message || 'Unknown error'}`
+      console.error(errorMsg)
+      toast.error(`Failed to load video - ${error.message || 'Check file format'}`)
+    } else {
+      toast.error('Failed to load video - Unknown error')
+    }
   }
 
   const handleVideoTimeUpdate = () => {
@@ -614,9 +628,21 @@ const ResultsViewer = () => {
             <div className="flex items-center space-x-2 mb-1">
               <h1 className="text-3xl font-bold">{result.filename}</h1>
               {jobId.startsWith('stream-event-') && (
-                <Badge variant="outline" className="text-sm">
-                  Live Stream Event
-                </Badge>
+                <>
+                  <Badge variant="outline" className="text-sm">
+                    Live Stream Event
+                  </Badge>
+                  {result.incident_status && (
+                    <Badge 
+                      variant={result.incident_status === 'completed' ? 'default' : 'secondary'} 
+                      className="text-sm"
+                    >
+                      {result.incident_status === 'completed' ? 'Incident Complete' : 
+                       result.incident_status === 'active' ? 'Ongoing Incident' : 
+                       'Processing Incident'}
+                    </Badge>
+                  )}
+                </>
               )}
             </div>
             <p className="text-muted-foreground">

@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, List
+import numpy as np
 import os
 import time
 import json
@@ -26,7 +27,6 @@ from slowapi.errors import RateLimitExceeded
 # Add these imports at the top of main.py after existing imports
 import cv2
 import base64
-import numpy as np
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 import queue
@@ -73,6 +73,8 @@ class ViolenceEvent:
     thumbnail_path: str = ""
     clip_path: str = ""    # Short clip of the incident
     metadata: str = ""     # JSON string
+    incident_status: str = "completed"  # 'active', 'finalizing', 'completed'
+    incident_id: str = ""  # Groups related detections
 
 # Add these classes after the existing ViolenceEvent class
 @dataclass
@@ -87,6 +89,289 @@ class RTSPStream:
     total_detections: int = 0
     is_recording: bool = False
     thumbnail_path: str = ""
+
+@dataclass
+class ActiveIncident:
+    """Tracks active violence incidents for stitching"""
+    incident_id: str
+    stream_id: int
+    stream_name: str
+    start_time: float
+    last_detection_time: float
+    confidence_scores: List[float]
+    detection_timestamps: List[float]  # When each detection occurred
+    frame_buffer: List[np.ndarray]
+    event_ids: List[int]
+    
+class EventStitchingManager:
+    """Manages stitching of continuous violent events"""
+    
+    def __init__(self, stitch_window: float = 10.0, max_incident_duration: float = 60.0):
+        self.stitch_window = stitch_window  # seconds between detections to stitch
+        self.max_incident_duration = max_incident_duration  # max total incident length
+        self.active_incidents: Dict[int, ActiveIncident] = {}  # stream_id -> incident
+        self._lock = threading.Lock()
+        self.finalization_timers: Dict[int, threading.Timer] = {}
+    
+    def cleanup_stream_incidents(self, stream_id: int):
+        """Cleanup and finalize any active incidents for a stream"""
+        with self._lock:
+            if stream_id in self.active_incidents:
+                print(f"Finalizing orphaned incident for stream {stream_id}")
+                # Cancel timer first
+                if stream_id in self.finalization_timers:
+                    self.finalization_timers[stream_id].cancel()
+                    del self.finalization_timers[stream_id]
+                # Force finalize the incident
+                self.finalize_incident(stream_id)
+        
+    def should_stitch_to_existing(self, stream_id: int, current_time: float) -> bool:
+        """Check if this detection should be stitched to an existing incident"""
+        if stream_id not in self.active_incidents:
+            return False
+            
+        incident = self.active_incidents[stream_id]
+        time_since_last = current_time - incident.last_detection_time
+        total_duration = current_time - incident.start_time
+        
+        return (time_since_last <= self.stitch_window and 
+                total_duration <= self.max_incident_duration)
+    
+    def start_new_incident(self, stream_id: int, stream_name: str, current_time: float, 
+                          confidence: float, frame_buffer: List[np.ndarray], event_id: int) -> str:
+        """Start a new incident with recent frame history"""
+        incident_id = f"incident_{stream_id}_{int(current_time)}"
+        
+        with self._lock:
+            self.active_incidents[stream_id] = ActiveIncident(
+                incident_id=incident_id,
+                stream_id=stream_id,
+                stream_name=stream_name,
+                start_time=current_time,
+                last_detection_time=current_time,
+                confidence_scores=[confidence],
+                detection_timestamps=[current_time],
+                frame_buffer=frame_buffer.copy() if frame_buffer else [],
+                event_ids=[event_id]
+            )
+            
+            # Cancel any existing finalization timer
+            if stream_id in self.finalization_timers:
+                self.finalization_timers[stream_id].cancel()
+            
+            # Start new finalization timer
+            self._schedule_incident_finalization(stream_id)
+            
+        print(f"Started new incident {incident_id} for stream {stream_id}")
+        return incident_id
+    
+    def extend_incident(self, stream_id: int, current_time: float, 
+                       confidence: float, additional_frames: List[np.ndarray], event_id: int):
+        """Extend existing incident"""
+        with self._lock:
+            if stream_id in self.active_incidents:
+                incident = self.active_incidents[stream_id]
+                incident.last_detection_time = current_time
+                incident.confidence_scores.append(confidence)
+                incident.detection_timestamps.append(current_time)
+                incident.event_ids.append(event_id)
+                
+                # Add recent frames to incident buffer (limit total size)
+                if additional_frames and len(incident.frame_buffer) < 200:
+                    frames_to_add = min(len(additional_frames), 200 - len(incident.frame_buffer))
+                    incident.frame_buffer.extend(additional_frames[-frames_to_add:])
+                
+                # Reset finalization timer
+                if stream_id in self.finalization_timers:
+                    self.finalization_timers[stream_id].cancel()
+                self._schedule_incident_finalization(stream_id)
+                
+                print(f"Extended incident {incident.incident_id}, duration: {current_time - incident.start_time:.1f}s")
+    
+    def _schedule_incident_finalization(self, stream_id: int):
+        """Schedule incident finalization after stitch window expires"""
+        def finalize():
+            self.finalize_incident(stream_id)
+        
+        timer = threading.Timer(self.stitch_window + 2.0, finalize)  # Extra 2s buffer
+        self.finalization_timers[stream_id] = timer
+        timer.start()
+    
+    def finalize_incident(self, stream_id: int):
+        """Finalize incident by creating stitched clip and updating events"""
+        with self._lock:
+            if stream_id not in self.active_incidents:
+                return
+                
+            incident = self.active_incidents[stream_id]
+            print(f"Finalizing incident {incident.incident_id}")
+            
+            try:
+                # Create stitched video clip
+                stitched_clip_path = self._create_stitched_clip(incident)
+                
+                # Update all related events in database
+                self._update_incident_events(incident, stitched_clip_path)
+                
+                # Send finalization notification
+                self._send_incident_finalized_notification(incident, stitched_clip_path)
+                
+                print(f"Finalized incident {incident.incident_id} with {len(incident.event_ids)} events")
+                
+            except Exception as e:
+                print(f"Error finalizing incident {incident.incident_id}: {e}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                # Clean up
+                del self.active_incidents[stream_id]
+                if stream_id in self.finalization_timers:
+                    del self.finalization_timers[stream_id]
+    
+    def _create_stitched_clip(self, incident: ActiveIncident) -> str:
+        """Create stitched video clip from frame buffer"""
+        if not incident.frame_buffer:
+            return ""
+            
+        try:
+            clip_filename = f"stitched_{incident.incident_id}.mp4"
+            clip_dir = os.path.join(RESULTS_FOLDER, "stream_clips")
+            os.makedirs(clip_dir, exist_ok=True)
+            clip_path = os.path.join(clip_dir, clip_filename)
+            
+            # Create video writer with H.264 codec for web compatibility
+            if len(incident.frame_buffer) > 0:
+                height, width = incident.frame_buffer[0].shape[:2]
+                
+                # Use H.264 codec for better web compatibility
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264
+                
+                # Calculate FPS based on actual timing
+                total_duration = incident.last_detection_time - incident.start_time
+                fps = len(incident.frame_buffer) / max(total_duration, 1.0)
+                fps = min(max(fps, 2.0), 30.0)  # Clamp between 2-30 fps
+                
+                print(f"Creating stitched clip: {len(incident.frame_buffer)} frames, {total_duration:.1f}s, {fps:.1f} fps")
+                
+                out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height), isColor=True)
+                
+                if out.isOpened():
+                    for frame in incident.frame_buffer:
+                        out.write(frame)
+                    out.release()
+                    
+                    # Verify clip was created successfully
+                    if os.path.exists(clip_path) and os.path.getsize(clip_path) > 5000:
+                        print(f"Stitched clip created: {clip_path} ({os.path.getsize(clip_path)} bytes)")
+                        return f"/api/results/stream_clips/{clip_filename}"
+                    else:
+                        print(f"Stitched clip too small or failed: {clip_path}")
+                        if os.path.exists(clip_path):
+                            os.remove(clip_path)
+                else:
+                    print(f"Could not open video writer for stitched clip")
+                
+            return ""
+            
+        except Exception as e:
+            print(f"Error creating stitched clip: {e}")
+            import traceback
+            traceback.print_exc()
+            return ""
+    
+    def _update_incident_events(self, incident: ActiveIncident, stitched_clip_path: str):
+        """Update all events in this incident with final data"""
+        if not incident.event_ids:
+            return
+            
+        conn = sqlite3.connect(event_db.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Calculate final incident data
+            total_duration = incident.last_detection_time - incident.start_time
+            avg_confidence = sum(incident.confidence_scores) / len(incident.confidence_scores)
+            
+            # Keep only the FIRST event as the primary incident record
+            primary_event_id = incident.event_ids[0]
+            
+            # Create timeline segments from detection timestamps
+            timeline_segments = []
+            for i, (timestamp, confidence) in enumerate(zip(incident.detection_timestamps, incident.confidence_scores)):
+                relative_time = timestamp - incident.start_time
+                timeline_segments.append({
+                    'start': relative_time,
+                    'end': relative_time + 3.0,  # detection_interval
+                    'confidence': confidence,
+                    'detection_number': i + 1
+                })
+            
+            # Enhanced metadata with timeline
+            enhanced_metadata = json.dumps({
+                'stream_name': incident.stream_name,
+                'detection_type': 'stitched_incident',
+                'total_detections': len(incident.confidence_scores),
+                'timeline_segments': timeline_segments,
+                'incident_duration': total_duration,
+                'pipeline_version': 'stitched_stream_v3'
+            })
+            
+            # Update primary event with full incident data
+            cursor.execute('''
+                UPDATE violence_events 
+                SET incident_status = 'completed',
+                    incident_id = ?,
+                    clip_path = ?,
+                    end_time = ?,
+                    duration = ?,
+                    confidence = ?,
+                    filename = ?,
+                    metadata = ?
+                WHERE id = ?
+            ''', (incident.incident_id, stitched_clip_path, 
+                 incident.start_time + total_duration, total_duration, 
+                 avg_confidence, f"{incident.stream_name} (Incident)", enhanced_metadata, primary_event_id))
+            
+            # DELETE the other events - they're redundant in stitched mode
+            if len(incident.event_ids) > 1:
+                other_event_ids = incident.event_ids[1:]
+                placeholders = ','.join(['?' for _ in other_event_ids])
+                cursor.execute(f'DELETE FROM violence_events WHERE id IN ({placeholders})', other_event_ids)
+                print(f"Deleted {len(other_event_ids)} redundant events for incident {incident.incident_id}")
+            
+            conn.commit()
+            print(f"Updated primary event {primary_event_id} for incident {incident.incident_id}")
+            
+        except Exception as e:
+            print(f"Error updating incident events: {e}")
+        finally:
+            conn.close()
+    
+    def _send_incident_finalized_notification(self, incident: ActiveIncident, stitched_clip_path: str):
+        """Send notification that incident has been finalized"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            total_duration = incident.last_detection_time - incident.start_time
+            avg_confidence = sum(incident.confidence_scores) / len(incident.confidence_scores)
+            
+            loop.run_until_complete(manager.send_job_update(f"incident_finalized_{incident.incident_id}", {
+                'type': 'incident_finalized',
+                'incident_id': incident.incident_id,
+                'stream_id': incident.stream_id,
+                'stream_name': incident.stream_name,
+                'total_duration': total_duration,
+                'avg_confidence': avg_confidence,
+                'detection_count': len(incident.confidence_scores),
+                'stitched_clip': stitched_clip_path,
+                'event_ids': incident.event_ids
+            }))
+            
+            loop.close()
+            
+        except Exception as e:
+            print(f"Error sending incident finalized notification: {e}")
 
 class StreamDatabase:
     def __init__(self, db_path: str = DB_PATH):
@@ -221,6 +506,8 @@ class EventDatabase:
                 thumbnail_path TEXT,
                 clip_path TEXT,
                 metadata TEXT,
+                incident_status TEXT DEFAULT 'completed',
+                incident_id TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -236,9 +523,19 @@ class EventDatabase:
             )
         ''')
 
+        # Add new columns if they don't exist (for existing databases)
+        try:
+            cursor.execute('ALTER TABLE violence_events ADD COLUMN incident_status TEXT DEFAULT "completed"')
+            cursor.execute('ALTER TABLE violence_events ADD COLUMN incident_id TEXT DEFAULT ""')
+            print("Added incident tracking columns to existing database")
+        except sqlite3.OperationalError:
+            # Columns already exist
+            pass
+
         # Create indices for performance
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON violence_events(timestamp)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_source ON violence_events(source_type, source_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_incident ON violence_events(incident_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_date ON daily_stats(date)')
 
         conn.commit()
@@ -252,12 +549,13 @@ class EventDatabase:
         cursor.execute('''
             INSERT INTO violence_events 
             (timestamp, source_type, source_id, filename, start_time, end_time, 
-             duration, confidence, thumbnail_path, clip_path, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             duration, confidence, thumbnail_path, clip_path, metadata, incident_status, incident_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             event.timestamp, event.source_type, event.source_id, event.filename,
             event.start_time, event.end_time, event.duration, event.confidence,
-            event.thumbnail_path, event.clip_path, event.metadata
+            event.thumbnail_path, event.clip_path, event.metadata, 
+            event.incident_status, event.incident_id
         ))
 
         event_id = cursor.lastrowid
@@ -556,6 +854,7 @@ results_history: Dict[str, dict] = {}
 
 # Initialize database - moved to startup to avoid blocking
 event_db = None
+stitching_manager = None
 
 # WebSocket connections for real-time updates
 class ConnectionManager:
@@ -620,6 +919,17 @@ def cleanup_all_streams():
         shutdown_in_progress = True
     
     print("Cleaning up all active streams...")
+    
+    # First finalize any orphaned incidents
+    if stitching_manager:
+        try:
+            streams_with_incidents = list(stitching_manager.active_incidents.keys())
+            for stream_id in streams_with_incidents:
+                stitching_manager.cleanup_stream_incidents(stream_id)
+            print(f"Finalized {len(streams_with_incidents)} orphaned incidents")
+        except Exception as e:
+            print(f"Error finalizing orphaned incidents: {e}")
+    
     streams_to_stop = list(active_streams.keys())
 
     for stream_id in streams_to_stop:
@@ -758,6 +1068,7 @@ class RTSPStreamProcessor:
         # Frame buffers and processing
         self.raw_frame_queue = queue.Queue(maxsize=30)  # Raw frames from RTSP
         self.rgb_frame_buffer = deque(maxlen=16)  # RGB frames for model (224x224x3 uint8)
+        self.display_frame_buffer = deque(maxlen=50)  # Rolling buffer for incident clips (display quality)
         self.last_display_frame = None  # Last frame for display/thumbnail
 
         # Timing and rate control
@@ -874,6 +1185,13 @@ class RTSPStreamProcessor:
         print(f"Stopping stream {self.stream_id}")
         self.is_running = False
 
+        # Finalize any active incidents before stopping
+        if stitching_manager:
+            try:
+                stitching_manager.cleanup_stream_incidents(self.stream_id)
+            except Exception as e:
+                print(f"Error cleaning up incidents for stream {self.stream_id}: {e}")
+
         # Clean up capture first
         if self.cap:
             try:
@@ -987,6 +1305,8 @@ class RTSPStreamProcessor:
                 # Store raw frame for display/thumbnail (keep BGR format)
                 with self._lock:
                     self.last_display_frame = frame.copy()
+                    # Also add to rolling buffer for incident clips
+                    self.display_frame_buffer.append(frame.copy())
 
                 # Add to processing queue (non-blocking)
                 try:
@@ -1144,10 +1464,20 @@ class RTSPStreamProcessor:
             traceback.print_exc()
 
     def _save_detection_event(self, confidence: float):
-        """Save violence detection event to database with enhanced clip generation"""
+        """Save violence detection event with stitching support"""
         try:
             current_time = time.time()
             timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Get recent frames for stitching (include lead-up to violence)
+            recent_frames = []
+            with self._lock:
+                if self.display_frame_buffer:
+                    # Get last 30 frames (about 10 seconds at 3fps) for context
+                    recent_frames = list(self.display_frame_buffer)[-30:]
+            
+            # Check if this should be stitched to existing incident
+            should_stitch = stitching_manager.should_stitch_to_existing(self.stream_id, current_time)
             
             # Generate thumbnail from current frame
             thumbnail_filename = f"stream_{self.stream_id}_event_{int(current_time)}.jpg"
@@ -1177,45 +1507,138 @@ class RTSPStreamProcessor:
                 print(f"Error saving thumbnail for stream {self.stream_id}: {e}")
                 thumbnail_url = ""
 
-            # Generate a short clip if we have enough buffer frames
+            # Generate a short clip with proper H.264 encoding
             clip_url = ""
-            if len(self.rgb_frame_buffer) >= 8:  # At least 8 frames for a clip
-                try:
-                    clip_filename = f"stream_{self.stream_id}_clip_{int(current_time)}.mp4"
-                    clips_dir = os.path.join(RESULTS_FOLDER, "stream_clips")
-                    os.makedirs(clips_dir, exist_ok=True)
-                    clip_path = os.path.join(clips_dir, clip_filename)
+            try:
+                clip_filename = f"stream_{self.stream_id}_clip_{int(current_time)}.mp4"
+                clips_dir = os.path.join(RESULTS_FOLDER, "stream_clips")
+                os.makedirs(clips_dir, exist_ok=True)
+                clip_path = os.path.join(clips_dir, clip_filename)
+                
+                clip_frames = []
+                with self._lock:
+                    if self.last_display_frame is not None:
+                        display_frame = self.last_display_frame.copy()
+                        
+                        # Standard web resolution (divisible by 16 for better compression)
+                        target_width, target_height = 640, 480
+                        resized_frame = cv2.resize(display_frame, (target_width, target_height))
+                        
+                        # Create 16 frames (4 seconds at 4 FPS) - optimal for web
+                        for _ in range(16):
+                            clip_frames.append(resized_frame.copy())
+                
+                if clip_frames and len(clip_frames) >= 8:
+                    success = False
                     
-                    # Create a short video clip from recent frames
-                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    out = cv2.VideoWriter(clip_path, fourcc, 4.0, (336, 336))  # 4 FPS, model input size
+                    # Try H.264 first (most compatible)
+                    try:
+                        # Use libx264 compatible fourcc
+                        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264
+                        out = cv2.VideoWriter(
+                            clip_path, 
+                            fourcc, 
+                            4.0,  # 4 FPS
+                            (target_width, target_height),
+                            isColor=True
+                        )
+                        
+                        if out.isOpened():
+                            for frame in clip_frames:
+                                # Ensure frame is in BGR format (OpenCV default)
+                                if len(frame.shape) == 3 and frame.shape[2] == 3:
+                                    out.write(frame)
+                            out.release()
+                            
+                            # Verify file creation and reasonable size
+                            if os.path.exists(clip_path) and os.path.getsize(clip_path) > 2000:  # At least 2KB
+                                # Try to verify it's a valid MP4 by opening it
+                                test_cap = cv2.VideoCapture(clip_path)
+                                if test_cap.isOpened():
+                                    ret, test_frame = test_cap.read()
+                                    test_cap.release()
+                                    
+                                    if ret and test_frame is not None:
+                                        clip_url = f"/api/results/stream_clips/{clip_filename}"
+                                        print(f"Generated H.264 clip for stream {self.stream_id}: {clip_url} ({os.path.getsize(clip_path)} bytes)")
+                                        success = True
+                                    else:
+                                        print(f"Generated clip not readable for stream {self.stream_id}")
+                                        os.remove(clip_path)
+                                else:
+                                    print(f"Generated clip not openable for stream {self.stream_id}")
+                                    os.remove(clip_path)
+                            else:
+                                print(f"Clip file too small for stream {self.stream_id}")
+                                if os.path.exists(clip_path):
+                                    os.remove(clip_path)
+                        else:
+                            print(f"Failed to open H.264 VideoWriter for stream {self.stream_id}")
+                            out.release()
+                            
+                    except Exception as h264_error:
+                        print(f"H.264 encoding failed for stream {self.stream_id}: {h264_error}")
                     
-                    # Use last 8 frames from buffer (2 seconds at 4 FPS)
-                    recent_frames = list(self.rgb_frame_buffer)[-8:]
-                    for rgb_frame in recent_frames:
-                        # Convert RGB back to BGR for video writing
-                        bgr_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
-                        out.write(bgr_frame)
+                    # Fallback: Try MJPEG (Motion JPEG) - very compatible
+                    if not success:
+                        try:
+                            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                            out = cv2.VideoWriter(clip_path, fourcc, 4.0, (target_width, target_height))
+                            
+                            if out.isOpened():
+                                for frame in clip_frames:
+                                    out.write(frame)
+                                out.release()
+                                
+                                if os.path.exists(clip_path) and os.path.getsize(clip_path) > 2000:
+                                    clip_url = f"/api/results/stream_clips/{clip_filename}"
+                                    print(f"Generated MJPEG clip for stream {self.stream_id}: {clip_url}")
+                                    success = True
+                                else:
+                                    if os.path.exists(clip_path):
+                                        os.remove(clip_path)
+                            else:
+                                out.release()
+                                
+                        except Exception as mjpeg_error:
+                            print(f"MJPEG encoding failed for stream {self.stream_id}: {mjpeg_error}")
                     
-                    out.release()
-                    clip_url = f"/api/results/stream_clips/{clip_filename}"
-                    print(f"Generated event clip for stream {self.stream_id}: {clip_url}")
-                    
-                except Exception as e:
-                    print(f"Error generating clip for stream {self.stream_id}: {e}")
+                    if not success:
+                        print(f"All codec attempts failed for stream {self.stream_id}")
+                        
+            except Exception as e:
+                print(f"Clip generation error for stream {self.stream_id}: {e}")
+                import traceback
+                traceback.print_exc()
 
-            # Create event record
+            # Handle event stitching logic
+            incident_id = ""
+            incident_status = "active"  # Default for new detections
+            
+            if should_stitch:
+                # Extend existing incident with recent frames
+                incident = stitching_manager.active_incidents.get(self.stream_id)
+                if incident:
+                    incident_id = incident.incident_id
+                print(f"Extending incident {incident_id} for stream {self.stream_id}")
+            else:
+                # Start new incident - will get incident_id after event creation
+                pass
+
+            # Create event record (temporary clip for immediate notification)
             event = ViolenceEvent(
                 timestamp=timestamp_str,
                 source_type='stream',
                 source_id=str(self.stream_id),
                 filename=self.stream_name,
-                start_time=0.0,  # For live streams, we don't have precise start/end times
-                end_time=self.detection_interval,
+                start_time=current_time,  # Use actual timestamp for timeline
+                end_time=current_time + self.detection_interval,
                 duration=self.detection_interval,
                 confidence=confidence,
                 thumbnail_path=thumbnail_url,
-                clip_path=clip_url,
+                clip_path=clip_url,  # Temporary clip for immediate viewing
+                incident_status=incident_status,
+                incident_id=incident_id,
                 metadata=json.dumps({
                     'stream_name': self.stream_name,
                     'rtsp_url': self.rtsp_url,
@@ -1223,7 +1646,7 @@ class RTSPStreamProcessor:
                     'buffer_size': len(self.rgb_frame_buffer),
                     'model_input_size': self.model_input_size,
                     'temporal_length': self.model_temporal_length,
-                    'pipeline_version': 'enhanced_stream_v2',
+                    'pipeline_version': 'stitched_stream_v3',
                     'frame_timestamp': current_time,
                     'detection_interval': self.detection_interval
                 })
@@ -1233,12 +1656,30 @@ class RTSPStreamProcessor:
             event_id = event_db.save_event(event)
             stream_db.increment_detection_count(self.stream_id)
 
-            print(f"Saved enhanced detection event {event_id} for stream {self.stream_id}")
+            # Handle incident stitching
+            if should_stitch:
+                # Update the event_id in the existing incident
+                stitching_manager.extend_incident(self.stream_id, current_time, confidence, recent_frames, event_id)
+            else:
+                # Start new incident with recent frames
+                incident_id = stitching_manager.start_new_incident(
+                    self.stream_id, self.stream_name, current_time, confidence, recent_frames, event_id
+                )
+                # Update event with incident_id
+                conn = sqlite3.connect(event_db.db_path)
+                cursor = conn.cursor()
+                cursor.execute('UPDATE violence_events SET incident_id = ? WHERE id = ?', (incident_id, event_id))
+                conn.commit()
+                conn.close()
 
-            # Send WebSocket notification about the violence detection
+            print(f"Saved detection event {event_id} for stream {self.stream_id}, incident: {incident_id}")
+
+            # Send immediate WebSocket notification (for real-time alerts)
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+                
+                # Send violence detection notification with incident info
                 loop.run_until_complete(manager.send_job_update(f"violence_event_{event_id}", {
                     'type': 'violence_detected',
                     'event_id': event_id,
@@ -1246,8 +1687,11 @@ class RTSPStreamProcessor:
                     'stream_name': self.stream_name,
                     'confidence': confidence,
                     'thumbnail': thumbnail_url,
-                    'clip': clip_url,
-                    'timestamp': timestamp_str
+                    'clip': clip_url,  # Temporary clip
+                    'timestamp': timestamp_str,
+                    'incident_id': incident_id,
+                    'incident_status': incident_status,
+                    'is_ongoing_incident': should_stitch
                 }))
                 loop.close()
             except Exception as e:
@@ -1256,8 +1700,8 @@ class RTSPStreamProcessor:
         except Exception as e:
             print(f"Error saving detection event for stream {self.stream_id}: {e}")
             import traceback
-            traceback.print_exc()
-
+            traceback.print_exc()    
+    
     def _save_thumbnail(self):
         """Save current frame as thumbnail"""
         try:
@@ -1396,9 +1840,11 @@ async def startup_event():
 
         # Initialize databases
         print("Initializing databases...")
+        global event_db, stream_db, stitching_manager
         event_db = EventDatabase()
         stream_db = StreamDatabase()
-        print("Databases initialized successfully")
+        stitching_manager = EventStitchingManager()
+        print("Databases and stitching manager initialized successfully")
 
         # Recover stream states from previous shutdown
         recover_stream_states()
@@ -1547,11 +1993,19 @@ def generate_thumbnail(video_path: str, output_path: str, frame_number: int = 0)
         return False
 
 def process_video_sync(job_id: str, video_path: str, threshold: float = None):
-    """Process video using consecutive frame sequences with first violence inference time tracking"""
+    """Process video using consecutive frame sequences with progress updates"""
 
     if model is None:
         active_jobs[job_id]['status'] = 'error'
         active_jobs[job_id]['message'] = 'Model not loaded'
+        # Send WebSocket update
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+            loop.close()
+        except:
+            pass
         return
 
     if threshold is None:
@@ -1563,12 +2017,29 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
         if metadata is None:
             active_jobs[job_id]['status'] = 'error'
             active_jobs[job_id]['message'] = 'Could not read video file'
+            # Send WebSocket update
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+                loop.close()
+            except:
+                pass
             return
 
         active_jobs[job_id]['metadata'] = metadata
         active_jobs[job_id]['status'] = 'processing'
         active_jobs[job_id]['progress'] = 5
         active_jobs[job_id]['message'] = 'Extracting frames'
+
+        # Send WebSocket progress update
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+            loop.close()
+        except:
+            pass
 
         # Generate thumbnail
         thumbnail_path = os.path.join(RESULTS_FOLDER, f"{job_id}_thumbnail.jpg")
@@ -1584,10 +2055,27 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
         if not sequences:
             active_jobs[job_id]['status'] = 'error'
             active_jobs[job_id]['message'] = 'Failed to extract frame sequences'
+            # Send WebSocket update
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+                loop.close()
+            except:
+                pass
             return
 
         active_jobs[job_id]['progress'] = 30
         active_jobs[job_id]['message'] = 'Processing sequences'
+
+        # Send WebSocket progress update
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+            loop.close()
+        except:
+            pass
 
         # Determine motion enhancement
         use_motion = hasattr(model, 'use_motion_enhancement') and model.use_motion_enhancement
@@ -1595,13 +2083,23 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
         # Process each sequence independently with individual timing
         segments = []
         total_sequences = len(sequences)
-        first_violence_inference_time = None  # Track first violence detection time
-        total_inference_time = 0.0  # Track total processing time for reference
+        first_violence_inference_time = None
+        total_inference_time = 0.0
         
         for i, (sequence, (start_time, end_time)) in enumerate(zip(sequences, timestamps)):
             progress = 30 + int(60 * i / total_sequences)
             active_jobs[job_id]['progress'] = progress
             active_jobs[job_id]['message'] = f'Analyzing sequence {i+1}/{total_sequences}'
+            
+            # Send WebSocket progress update every few sequences to avoid spam
+            if i % 3 == 0 or i == total_sequences - 1:
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+                    loop.close()
+                except:
+                    pass
             
             # Preprocess this sequence
             processed_data = preprocess_frames(sequence, compute_flow=use_motion)
@@ -1624,11 +2122,23 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
                     'start': start_time,
                     'end': end_time,
                     'confidence': float(confidence),
-                    'inference_time': inference_time,  # Store individual inference time
+                    'inference_time': inference_time,
                     'start_formatted': f"{int(start_time//60)}:{int(start_time%60):02d}",
                     'end_formatted': f"{int(end_time//60)}:{int(end_time%60):02d}"
                 })
                 print(f"Violence detected in sequence {i+1}: {start_time:.1f}-{end_time:.1f}s, confidence: {confidence:.3f}, inference: {inference_time:.3f}s")
+
+        active_jobs[job_id]['progress'] = 95
+        active_jobs[job_id]['message'] = 'Finalizing results'
+        
+        # Send WebSocket progress update
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+            loop.close()
+        except:
+            pass
 
         # Merge close segments (within 1 second) while preserving first inference time
         if segments:
@@ -1681,9 +2191,9 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
             'overall_result': {
                 'is_fight': has_violence,
                 'confidence': float(overall_confidence),
-                'inference_time': display_inference_time,  # First violence inference time
-                'first_violence_inference_time': first_violence_inference_time,  # Explicit field
-                'total_processing_time': total_inference_time,  # Total time for reference
+                'inference_time': display_inference_time,
+                'first_violence_inference_time': first_violence_inference_time,
+                'total_processing_time': total_inference_time,
                 'sequences_processed': total_sequences
             },
             'segments': segments,
@@ -1714,6 +2224,15 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
         active_jobs[job_id]['message'] = 'Processing complete'
         active_jobs[job_id]['result'] = result
 
+        # Send final WebSocket update
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+            loop.close()
+        except:
+            pass
+
         results_history[job_id] = {
             'job_id': job_id,
             'filename': os.path.basename(video_path),
@@ -1739,6 +2258,15 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
         traceback.print_exc()
         active_jobs[job_id]['status'] = 'error'
         active_jobs[job_id]['message'] = f'Error: {str(e)}'
+        
+        # Send WebSocket error update
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(manager.send_job_update(job_id, active_jobs[job_id]))
+            loop.close()
+        except:
+            pass
 
 # API Routes
 @app.get("/")
@@ -1747,7 +2275,14 @@ async def root():
 
 @app.get("/api/jobs", response_model=List[JobStatus])
 async def get_all_jobs():
-    """Get all active jobs"""
+    """Get all active jobs ordered by most recent first"""
+    # Sort jobs by timestamp (most recent first)
+    sorted_jobs = sorted(
+        active_jobs.values(), 
+        key=lambda x: x.get('timestamp', ''), 
+        reverse=True
+    )
+    
     return [
         JobStatus(
             id=job['id'],
@@ -1760,15 +2295,23 @@ async def get_all_jobs():
             thumbnail=job.get('thumbnail'),
             result=job.get('result')
         )
-        for job in active_jobs.values()
+        for job in sorted_jobs
     ]
 
 @app.get("/api/history")
 async def get_history():
-    """Get processing history"""
+    """Get processing history ordered by most recent first"""
     # Reload history from file to ensure consistency
     await load_history_from_file()
-    return {"history": list(results_history.values())}
+    
+    # Sort history by timestamp (most recent first)
+    sorted_history = sorted(
+        results_history.values(),
+        key=lambda x: x.get('timestamp', ''),
+        reverse=True
+    )
+    
+    return {"history": sorted_history}
 
 @app.get("/api/stats")
 async def get_dashboard_stats():
@@ -2694,7 +3237,7 @@ async def get_stream_clip(filename: str, request: Request):
                     iterfile(file_path, start, end),
                     status_code=206,
                     headers=headers,
-                    media_type=media_type  # or 'video/mp4' for video files
+                    media_type='video/mp4'
                 )
 
     # Regular response
@@ -2856,6 +3399,10 @@ async def get_stream_event_result(event_id: int):
                 metadata_dict = json.loads(event[11])
             except:
                 metadata_dict = {}
+                
+        # Get incident info (new columns are at end)
+        incident_status = event[12] if len(event) > 12 else "completed"
+        incident_id = event[13] if len(event) > 13 else ""
         
         # Get stream information
         stream_info = None
@@ -2869,15 +3416,31 @@ async def get_stream_event_result(event_id: int):
         duration = event[7]  # duration column
         duration_formatted = f"{int(duration//60)}:{int(duration%60):02d}"
         
-        # Create segments (live stream events typically have one segment)
-        segments = [{
-            'start': event[5],  # start_time
-            'end': event[6],    # end_time
-            'confidence': float(event[8]),  # confidence
-            'inference_time': metadata_dict.get('detection_interval', 3.0),  # Individual inference time
-            'start_formatted': f"{int(event[5]//60)}:{int(event[5]%60):02d}",
-            'end_formatted': f"{int(event[6]//60)}:{int(event[6]%60):02d}"
-        }]
+        # Create segments from timeline data (if available from stitched incident)
+        segments = []
+        timeline_segments = metadata_dict.get('timeline_segments', [])
+        
+        if timeline_segments and incident_status == 'completed':
+            # Use detailed timeline from stitched incident
+            for seg in timeline_segments:
+                segments.append({
+                    'start': seg['start'],
+                    'end': seg['end'], 
+                    'confidence': seg['confidence'],
+                    'inference_time': 3.0,  # detection_interval
+                    'start_formatted': f"{int(seg['start']//60)}:{int(seg['start']%60):02d}",
+                    'end_formatted': f"{int(seg['end']//60)}:{int(seg['end']%60):02d}"
+                })
+        else:
+            # Fallback for single detection or active incidents
+            segments = [{
+                'start': 0.0,  # Relative to incident start
+                'end': duration,
+                'confidence': float(event[8]),
+                'inference_time': metadata_dict.get('detection_interval', 3.0),
+                'start_formatted': f"0:00",
+                'end_formatted': f"{int(duration//60)}:{int(duration%60):02d}"
+            }]
         
         # Extract timing information from metadata
         detection_interval = metadata_dict.get('detection_interval', 3.0)
@@ -2889,16 +3452,19 @@ async def get_stream_event_result(event_id: int):
             'timestamp': event[1],  # timestamp
             'has_violence': True,   # Stream events are always violence detections
             'video_path': event[10] if event[10] else None,  # clip_path
+            'clip_path': event[10] if event[10] else None,   # Also provide as clip_path
             'thumbnail': event[9] if event[9] else None,     # thumbnail_path
+            'incident_status': incident_status,
+            'incident_id': incident_id,
             
             # Overall result info with enhanced timing
             'overall_result': {
                 'is_fight': True,
                 'confidence': float(event[8]),
-                'inference_time': detection_interval,  # Main inference time (for compatibility)
-                'first_violence_inference_time': detection_interval,  # Same as inference_time for streams
-                'total_processing_time': detection_interval,  # Same for single detection
-                'sequences_processed': 1  # Stream events are single detections
+                'inference_time': detection_interval,  
+                'first_violence_inference_time': detection_interval,
+                'total_processing_time': duration,  # Full incident duration
+                'sequences_processed': metadata_dict.get('total_detections', 1)
             },
             
             # Segments data
@@ -2910,11 +3476,13 @@ async def get_stream_event_result(event_id: int):
             'metadata': {
                 'duration': duration,
                 'duration_formatted': duration_formatted,
-                'width': metadata_dict.get('frame_width', 640),  # Default values
-                'height': metadata_dict.get('frame_height', 480),
-                'fps': metadata_dict.get('fps', 4.0),  # Typical for event clips
+                'width': metadata_dict.get('frame_width', 640),
+                'height': metadata_dict.get('frame_height', 480),  
+                'fps': metadata_dict.get('fps', 4.0),
                 'frame_count': int(duration * metadata_dict.get('fps', 4.0)),
-                'source_type': 'live_stream'
+                'source_type': 'live_stream',
+                'timeline_segments': timeline_segments,  # Pass timeline to frontend
+                'total_detections': metadata_dict.get('total_detections', 1)
             },
             
             # Model information with enhanced fields
