@@ -231,10 +231,10 @@ def validate_args(args):
         if not nonfight_dir.exists():
             raise ValueError(f"NonFight directory does not exist: {nonfight_dir}")
         
-        fight_videos = len(list(fight_dir.glob("*.avi")))
-        nonfight_videos = len(list(nonfight_dir.glob("*.avi")))
+        fight_videos = list(fight_dir.glob("*.avi")) + list(fight_dir.glob("*.mp4")) + list(fight_dir.glob("*.mov"))
+        nonfight_videos = list(nonfight_dir.glob("*.avi")) + list(nonfight_dir.glob("*.mp4")) + list(nonfight_dir.glob("*.mov"))
         
-        print(f"{split.capitalize()} split: {fight_videos} fight videos, {nonfight_videos} non-fight videos")
+        # print(f"{split.capitalize()} split: {fight_videos} fight videos, {nonfight_videos} non-fight videos")
         
         if fight_videos == 0 or nonfight_videos == 0:
             raise ValueError(f"No videos found in {split} split")

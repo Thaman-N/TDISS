@@ -101,7 +101,7 @@ class CUENetStyleDataset(Dataset):
         # Load Fight videos (label = 1)
         fight_dir = split_dir / "Fight"
         if fight_dir.exists():
-            fight_videos = list(fight_dir.glob("*.avi"))
+            fight_videos = list(fight_dir.glob("*.avi")) + list(fight_dir.glob("*.mp4")) + list(fight_dir.glob("*.mov"))
             if max_videos_per_class:
                 fight_videos = fight_videos[:max_videos_per_class]
             video_paths.extend(fight_videos)
@@ -110,7 +110,7 @@ class CUENetStyleDataset(Dataset):
         # Load NonFight videos (label = 0)
         nonfight_dir = split_dir / "NonFight"
         if nonfight_dir.exists():
-            nonfight_videos = list(nonfight_dir.glob("*.avi"))
+            nonfight_videos = list(nonfight_dir.glob("*.avi")) + list(nonfight_dir.glob("*.mp4")) + list(nonfight_dir.glob("*.mov"))
             if max_videos_per_class:
                 nonfight_videos = nonfight_videos[:max_videos_per_class]
             video_paths.extend(nonfight_videos)

@@ -25,7 +25,7 @@
   - [Quick Start](#quick-start)
   - [Training Pipeline](#training-pipeline)
   - [Running Tests](#running-tests)
-  - [Zero-shot Classification on RLVS](#zero-shot-classification-on-rlvs)
+  - [Zero-shot Classification on RLVS (if trained on RWF2000)](#zero-shot-classification-on-rlvs-if-trained-on-rwf2000)
   - [Project Structure](#project-structure)
   - [Requirements](#requirements)
   - [License](#license)
@@ -109,7 +109,13 @@ npm run dev
 
 ```bash
 cd backend/trainingpipeline
+# RWF 2000
 python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
+
+# RLVS
+python split_rlvs.py --rlvs_path "C:\archive\Real Life Violence Dataset" --output_path "C:\archive\RealLifeViolenceDatasetSplit" --copy
+python train_x3d_violence.py --dataset_path "C:\archive\RealLifeViolenceDatasetSplit" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
+
 ```
 
 ---
@@ -143,7 +149,7 @@ npm run test:coverage       # With coverage
 
 ---
 
-## Zero-shot Classification on RLVS
+## Zero-shot Classification on RLVS (if trained on RWF2000)
 
 ```bash
 python evaluate_rlvs.py "your/dataset/path"
@@ -159,8 +165,10 @@ backend
 ├── main.py
 ├── model.py
 ├── torch_detection.py
-├── nineone75.pth
+├── rlvs9875.pth
+├── rwf9250.pth
 ├── trainingpipeline
+│   ├── split_rlvs.py
 │   ├── testval.py
 │   ├── train_x3d_violence.py
 │   ├── x3d_dataset.py

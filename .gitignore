@@ -23,6 +23,8 @@ tp*/
 *.json
 .claude/
 CLAUDE.md
+*run/
+*_output/
 
 # System files
 .DS_Store
