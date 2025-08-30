@@ -833,7 +833,7 @@ UPLOAD_FOLDER = "uploads"
 RESULTS_FOLDER = "results"
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv'}
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB
-MODEL_PATH = r'nineone75.pth'
+MODEL_PATH = r'rwf9250.pth'
 DETECTION_THRESHOLD = 0.6
 
 # Cleanup and resource management configuration
