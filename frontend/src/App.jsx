@@ -12,6 +12,7 @@ import Navigation from './components/Navigation'
 import { WebSocketProvider } from './contexts/WebSocketContext'
 import LiveStreamDashboard from './components/LiveStreamDashboard'
 import StreamFullScreen from './components/StreamFullScreen'
+import MultiVideoGridViewer from './components/MultiVideoGridViewer'
 
 function AppContent() {
   const location = useLocation()
@@ -48,6 +49,7 @@ function AppContent() {
           <Route path="/results/:jobId" element={<ResultsViewer />} />
           {/* NEW: Add this line for stream events */}
           <Route path="/results/stream-event-:eventId" element={<ResultsViewer />} />
+          <Route path="/multi-analysis" element={<MultiVideoGridViewer />} />
           <Route path="/live-streams" element={<LiveStreamDashboard />} />
           <Route path="/stream-fullscreen/:streamId" element={<StreamFullScreen />} />
         </Routes>

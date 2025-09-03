@@ -2419,7 +2419,7 @@ async def get_event_details(event_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload", response_model=UploadResponse)
-@limiter.limit("5/minute")  # 5 uploads per minute per IP
+@limiter.limit("10/minute")  # 5 uploads per minute per IP
 async def upload_file(
     request: Request,
     file: Optional[UploadFile] = File(None),
@@ -2430,10 +2430,10 @@ async def upload_file(
     # Check if too many active jobs (limit to 3 like before)
     active_count = sum(1 for job in active_jobs.values()
                        if job['status'] in ['queued', 'processing'])
-    if active_count >= 3:
+    if active_count >= 10:
         raise HTTPException(
             status_code=429,
-            detail=f"Too many active jobs ({active_count}/3). Please wait."
+            detail=f"Too many active jobs ({active_count}/10). Please wait."
         )
 
     if not file and not video_path:
@@ -2870,7 +2870,7 @@ async def get_system_status():
         "error_jobs": error_count,
         "total_jobs": len(active_jobs),
         "history_count": len(results_history),
-        "max_concurrent_jobs": 3,
+        "max_concurrent_jobs": 10,
         "websocket_connections": len(manager.active_connections),
         "database_connected": True
     }

@@ -29,11 +29,11 @@ const UploadInterface = () => {
   const [uploadState, setUploadState] = useState({
     isUploading: false,
     uploadProgress: 0,
-    uploadedFile: null,
+    uploadedFiles: [], // Changed to array for multiple files
     localPath: '',
     inputMethod: 'upload', // 'upload' or 'path'
     uploadComplete: false,
-    jobId: null
+    jobIds: [] // Changed to array for multiple job IDs
   })
 
   const onDrop = useCallback((acceptedFiles, rejectedFiles) => {
@@ -52,14 +52,15 @@ const UploadInterface = () => {
     }
 
     if (acceptedFiles.length > 0) {
-      const file = acceptedFiles[0]
       setUploadState(prev => ({
         ...prev,
-        uploadedFile: file,
+        uploadedFiles: [...prev.uploadedFiles, ...acceptedFiles],
         inputMethod: 'upload'
       }))
-      toast.success('File selected', {
-        description: `${file.name} (${formatFileSize(file.size)})`
+      toast.success(`${acceptedFiles.length} file(s) selected`, {
+        description: acceptedFiles.length === 1 
+          ? `${acceptedFiles[0].name} (${formatFileSize(acceptedFiles[0].size)})`
+          : `${acceptedFiles.length} videos ready for processing`
       })
     }
   }, [])
@@ -70,7 +71,7 @@ const UploadInterface = () => {
       'video/*': ALLOWED_FORMATS.map(format => `.${format}`)
     },
     maxSize: MAX_FILE_SIZE,
-    multiple: false
+    multiple: true
   })
 
   const formatFileSize = (bytes) => {
@@ -82,9 +83,9 @@ const UploadInterface = () => {
   }
 
   const handleSubmit = async () => {
-  if (!uploadState.uploadedFile && !uploadState.localPath.trim()) {
+  if (!uploadState.uploadedFiles.length && !uploadState.localPath.trim()) {
     toast.error('No input provided', {
-      description: 'Please upload a file or provide a local path'
+      description: 'Please upload files or provide a local path'
     })
     return
   }
@@ -92,65 +93,87 @@ const UploadInterface = () => {
   setUploadState(prev => ({ ...prev, isUploading: true, uploadProgress: 0 }))
 
   try {
-    const formData = new FormData()
-    
-    if (uploadState.inputMethod === 'upload' && uploadState.uploadedFile) {
-      formData.append('file', uploadState.uploadedFile)
-    } else if (uploadState.inputMethod === 'path' && uploadState.localPath.trim()) {
-      formData.append('video_path', uploadState.localPath.trim())
-    }
+    const jobIds = []
+    let totalFiles = uploadState.inputMethod === 'upload' ? uploadState.uploadedFiles.length : 1
+    let completedFiles = 0
 
-    // Simulate upload progress for better UX (but don't complete until response)
     const progressInterval = setInterval(() => {
       setUploadState(prev => ({
         ...prev,
-        uploadProgress: Math.min(prev.uploadProgress + Math.random() * 15, 80) // Only go to 80%
+        uploadProgress: Math.min(prev.uploadProgress + Math.random() * 10, 80)
       }))
-    }, 200)
+    }, 300)
 
-    console.log('Sending upload request to /api/upload')
-    
-    const response = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData
-    })
+    if (uploadState.inputMethod === 'upload' && uploadState.uploadedFiles.length > 0) {
+      // Upload multiple files
+      for (const file of uploadState.uploadedFiles) {
+        const formData = new FormData()
+        formData.append('file', file)
 
-    clearInterval(progressInterval)
-    console.log('Upload response status:', response.status)
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData
+        })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('Upload failed with status:', response.status, 'Error:', errorText)
-      throw new Error(`Upload failed: ${response.status} ${errorText}`)
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`Upload failed for ${file.name}: ${response.status} ${errorText}`)
+        }
+
+        const result = await response.json()
+        if (result.success && result.job_id) {
+          jobIds.push(result.job_id)
+        }
+        
+        completedFiles++
+      }
+    } else if (uploadState.inputMethod === 'path' && uploadState.localPath.trim()) {
+      // Single local path
+      const formData = new FormData()
+      formData.append('video_path', uploadState.localPath.trim())
+
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Upload failed: ${response.status} ${errorText}`)
+      }
+
+      const result = await response.json()
+      if (result.success && result.job_id) {
+        jobIds.push(result.job_id)
+      }
     }
 
-    const result = await response.json()
-    console.log('Upload result:', result)
+    clearInterval(progressInterval)
 
-    if (result.success && result.job_id) {
+    if (jobIds.length > 0) {
       setUploadState(prev => ({
         ...prev,
         uploadProgress: 100,
         uploadComplete: true,
-        jobId: result.job_id,
+        jobIds: jobIds,
         isUploading: false
       }))
 
       toast.success('Upload successful!', {
-        description: 'Your video is now being processed',
-        action: {
-          label: 'View Progress',
-          onClick: () => navigate(`/dashboard?job=${result.job_id}`)
-        }
+        description: `${jobIds.length} video(s) are now being processed`
       })
 
-      // Auto-redirect after 3 seconds
+      // Route based on number of videos
       setTimeout(() => {
-        navigate(`/dashboard?job=${result.job_id}`)
-      }, 3000)
+        if (jobIds.length === 1) {
+          navigate(`/dashboard?job=${jobIds[0]}`)
+        } else {
+          navigate(`/multi-analysis?jobs=${jobIds.join(',')}`)
+        }
+      }, 2000)
       
     } else {
-      throw new Error(result.message || 'Invalid response from server')
+      throw new Error('No valid uploads processed')
     }
 
   } catch (error) {
@@ -170,17 +193,19 @@ const UploadInterface = () => {
     setUploadState({
       isUploading: false,
       uploadProgress: 0,
-      uploadedFile: null,
+      uploadedFiles: [],
       localPath: '',
       inputMethod: 'upload',
       uploadComplete: false,
-      jobId: null
+      jobIds: []
     })
   }
 
   const goToDashboard = () => {
-    if (uploadState.jobId) {
-      navigate(`/dashboard?job=${uploadState.jobId}`)
+    if (uploadState.jobIds.length === 1) {
+      navigate(`/dashboard?job=${uploadState.jobIds[0]}`)
+    } else if (uploadState.jobIds.length > 1) {
+      navigate(`/multi-analysis?jobs=${uploadState.jobIds.join(',')}`)
     } else {
       navigate('/dashboard')
     }
@@ -490,21 +515,28 @@ const UploadInterface = () => {
                         ? 'disabled border-muted-foreground/25 cursor-not-allowed opacity-50'
                         : isDragActive
                         ? 'drag-active'
-                        : uploadState.uploadedFile
+                        : uploadState.uploadedFiles.length > 0
                         ? 'has-file'
                         : 'border-muted-foreground/25'
                     }`}
                   >
                     <input {...getInputProps()} disabled={uploadState.isUploading} />
                     
-                    {uploadState.uploadedFile ? (
+                    {uploadState.uploadedFiles.length > 0 ? (
                       <div className="space-y-4 file-display">
                         <CheckCircle className="h-12 w-12 text-green-500 mx-auto file-icon" />
                         <div>
-                          <p className="font-medium">{uploadState.uploadedFile.name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {formatFileSize(uploadState.uploadedFile.size)}
+                          <p className="font-medium">
+                            {uploadState.uploadedFiles.length} file(s) selected
                           </p>
+                          <div className="text-sm text-muted-foreground space-y-1">
+                            {uploadState.uploadedFiles.map((file, index) => (
+                              <div key={index} className="flex items-center justify-between">
+                                <span className="truncate max-w-48">{file.name}</span>
+                                <span>{formatFileSize(file.size)}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                         {!uploadState.isUploading && (
                           <Button
@@ -512,12 +544,12 @@ const UploadInterface = () => {
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation()
-                              setUploadState(prev => ({ ...prev, uploadedFile: null }))
+                              setUploadState(prev => ({ ...prev, uploadedFiles: [] }))
                             }}
                             className="remove-button"
                           >
                             <X className="h-4 w-4 mr-2" />
-                            Remove
+                            Clear All
                           </Button>
                         )}
                       </div>
@@ -615,7 +647,7 @@ const UploadInterface = () => {
               ) : (
                 <Button 
                   onClick={handleSubmit}
-                  disabled={!uploadState.uploadedFile && !uploadState.localPath.trim()}
+                  disabled={!uploadState.uploadedFiles.length && !uploadState.localPath.trim()}
                   size="lg" 
                   className="px-12 start-button"
                 >
@@ -625,7 +657,7 @@ const UploadInterface = () => {
               )}
             </div>
 
-            {(uploadState.uploadedFile || uploadState.localPath) && !uploadState.isUploading && (
+            {(uploadState.uploadedFiles.length > 0 || uploadState.localPath) && !uploadState.isUploading && (
               <div className="text-center mt-4">
                 <Button variant="outline" onClick={clearSelection} className="clear-button">
                   Clear Selection

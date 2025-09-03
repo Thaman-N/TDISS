@@ -10,7 +10,7 @@ def evaluate_rlvs_dataset(dataset_path):
     Uses hardcoded paths for the model and dataset.
     """
     # Hardcoded paths
-    model_path = r"nineone75.pth"
+    model_path = r"rlvs9875.pth"
     threshold = 0.5
     output_json = "rlvs_evaluation_results.json"
     
@@ -20,8 +20,8 @@ def evaluate_rlvs_dataset(dataset_path):
     device = next(model.parameters()).device
     
     # Define dataset paths
-    violence_dir = Path(dataset_path) / "Violence"
-    non_violence_dir = Path(dataset_path) / "NonViolence"
+    violence_dir = Path(dataset_path) / "Fight"
+    non_violence_dir = Path(dataset_path) / "NonFight"
     
     # Check if directories exist
     if not violence_dir.exists():
