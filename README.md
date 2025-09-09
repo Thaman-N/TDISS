@@ -22,6 +22,7 @@
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
   - [Features](#features)
+  - [Benchmark](#benchmark)
   - [Quick Start](#quick-start)
   - [Training Pipeline](#training-pipeline)
   - [Running Tests](#running-tests)
@@ -45,6 +46,15 @@ A web-based dashboard for analyzing videos and detecting aggression using deep l
 * **Detailed Results**: Violence timeline, confidence scores, metadata.
 * **Search & Filter**: History browsing with search and filtering.
 * **Modern UI**: Responsive TailwindCSS-based design.
+
+---
+
+## Benchmark
+
+- RWF 2000 - 92.5% Validation Accuracy (94% Current SOTA)
+- RLVS - 99.5% Validation Accuracy (SOTA Performance)
+- Hockey Fight Videos - 100% Validation Accuracy (SOTA Performance)
+- Cross Dataset Validation accuracy varies from 80-90%
 
 ---
 
@@ -115,6 +125,10 @@ python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8
 # RLVS
 python split_rlvs.py --rlvs_path "C:\archive\Real Life Violence Dataset" --output_path "C:\archive\RealLifeViolenceDatasetSplit" --copy
 python train_x3d_violence.py --dataset_path "C:\archive\RealLifeViolenceDatasetSplit" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
+
+# Hockey Fights
+python hockey_split.py --input "C:\archive\HockeyFight" --output "C:\archive\HockeyFightSplit"
+python train_x3d_violence.py --dataset_path "C:\archive\HockeyFightSplit" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 2.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 224
 
 ```
 
