@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import sqlite3
 from dataclasses import dataclass
 import threading
+from dotenv import load_dotenv
 
 # Rate limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -35,6 +36,12 @@ from collections import deque
 import signal
 import sys
 import atexit
+
+# Add these imports at the top of main.py (after existing imports)
+import requests
+from datetime import datetime
+import base64
+from io import BytesIO
 
 def secure_filename(filename):
     """Make a filename safe for use in URLs and file systems."""
@@ -356,6 +363,7 @@ class EventStitchingManager:
             total_duration = incident.last_detection_time - incident.start_time
             avg_confidence = sum(incident.confidence_scores) / len(incident.confidence_scores)
             
+            # Send WebSocket notification
             loop.run_until_complete(manager.send_job_update(f"incident_finalized_{incident.incident_id}", {
                 'type': 'incident_finalized',
                 'incident_id': incident.incident_id,
@@ -367,6 +375,24 @@ class EventStitchingManager:
                 'stitched_clip': stitched_clip_path,
                 'event_ids': incident.event_ids
             }))
+            
+            # ADD THIS DISCORD INCIDENT SUMMARY BLOCK
+            # Send Discord incident summary
+            if discord_notifier and discord_notifier.enabled:
+                # Convert relative clip path to full URL if needed
+                full_clip_url = stitched_clip_path
+                if stitched_clip_path and not stitched_clip_path.startswith('http'):
+                    # Assuming you're running on localhost:8000
+                    full_clip_url = f"http://localhost:8000{stitched_clip_path}"
+                
+                discord_notifier.send_incident_summary(
+                    incident_id=incident.incident_id,
+                    stream_name=incident.stream_name,
+                    duration=total_duration,
+                    detection_count=len(incident.confidence_scores),
+                    avg_confidence=avg_confidence,
+                    clip_url=full_clip_url
+                )
             
             loop.close()
             
@@ -842,6 +868,784 @@ MAX_HISTORY_ITEMS = 500
 JOB_CLEANUP_AGE_HOURS = 24
 FILE_CLEANUP_DELAY_HOURS = 24
 
+load_dotenv()
+
+# Discord Configuration
+DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL', '')
+DISCORD_NOTIFICATIONS_ENABLED = os.getenv('DISCORD_NOTIFICATIONS_ENABLED', 'True').lower() == 'true'
+DISCORD_MENTION_EVERYONE = os.getenv('DISCORD_MENTION_EVERYONE', 'False').lower() == 'true'
+
+class DiscordNotifier:
+    """Discord notification service for violence detection alerts"""
+    
+    def __init__(self, webhook_url: str = None, enabled: bool = True):
+        self.webhook_url = webhook_url or DISCORD_WEBHOOK_URL
+        self.enabled = enabled and bool(self.webhook_url)
+        
+        if self.enabled:
+            print(f"Discord notifications enabled for webhook: {self.webhook_url[:50]}...")
+        else:
+            print("Discord notifications disabled")
+    
+    def send_violence_alert(self, 
+                           stream_id: int, 
+                           stream_name: str, 
+                           confidence: float, 
+                           timestamp: str,
+                           thumbnail_path: str = None,
+                           clip_path: str = None,
+                           incident_id: str = None,
+                           is_ongoing: bool = False):
+        """Send violence detection alert to Discord"""
+        
+        if not self.enabled:
+            return False
+            
+        try:
+            # Determine alert type and color
+            if is_ongoing:
+                alert_type = "🚨 ONGOING INCIDENT"
+                color = 0xFF6B6B  # Red
+                description = f"Violence continues to be detected in {stream_name}"
+            else:
+                alert_type = "⚠️ VIOLENCE DETECTED"
+                color = 0xFF9500  # Orange
+                description = f"New violence detected in {stream_name}"
+            
+            # Build embed
+            embed = {
+                "title": alert_type,
+                "description": description,
+                "color": color,
+                "timestamp": datetime.now().isoformat(),
+                "fields": [
+                    {
+                        "name": "Stream",
+                        "value": f"**{stream_name}** (ID: {stream_id})",
+                        "inline": True
+                    },
+                    {
+                        "name": "Confidence",
+                        "value": f"**{confidence:.1%}**",
+                        "inline": True
+                    },
+                    {
+                        "name": "Time",
+                        "value": f"`{timestamp}`",
+                        "inline": True
+                    }
+                ],
+                "footer": {
+                    "text": "Violence Detection System",
+                    "icon_url": "https://cdn.discordapp.com/emojis/1234567890123456789.png"  # Optional
+                }
+            }
+            
+            # Add incident info if available
+            if incident_id:
+                embed["fields"].append({
+                    "name": "Incident ID",
+                    "value": f"`{incident_id}`",
+                    "inline": False
+                })
+            
+            # Build message content
+            content = ""
+            if DISCORD_MENTION_EVERYONE:
+                content = "@everyone "
+            
+            content += f"Security Alert: Violence detected in **{stream_name}**"
+            
+            # Prepare payload
+            payload = {
+                "content": content,
+                "embeds": [embed]
+            }
+            
+            # Send main notification
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code in [200, 204]:
+                print(f"Discord alert sent successfully for stream {stream_id}")
+                
+                # Send thumbnail if available
+                if thumbnail_path and self._send_thumbnail(stream_id, stream_name, thumbnail_path):
+                    print(f"Discord thumbnail sent for stream {stream_id}")
+                
+                return True
+            else:
+                print(f"Discord webhook failed: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"Error sending Discord notification: {e}")
+            return False
+    
+    def _send_thumbnail(self, stream_id: int, stream_name: str, thumbnail_path: str) -> bool:
+        """Send thumbnail image as follow-up message"""
+        try:
+            # Convert URL path to file path
+            if thumbnail_path.startswith('/api/results/'):
+                file_path = os.path.join(RESULTS_FOLDER, thumbnail_path.replace('/api/results/', ''))
+            else:
+                file_path = thumbnail_path
+            
+            if not os.path.exists(file_path):
+                print(f"Thumbnail file not found: {file_path}")
+                return False
+            
+            # Read and send image
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (f'detection_{stream_id}.jpg', f, 'image/jpeg')
+                }
+                
+                payload = {
+                    'content': f'📸 Detection snapshot from **{stream_name}**'
+                }
+                
+                response = requests.post(
+                    self.webhook_url,
+                    data=payload,
+                    files=files,
+                    timeout=15
+                )
+                
+                return response.status_code in [200, 204]
+                
+        except Exception as e:
+            print(f"Error sending Discord thumbnail: {e}")
+            return False
+    
+    def _send_batch_thumbnail(self, job_id: str, filename: str, thumbnail_path: str) -> bool:
+        """Send thumbnail image for batch upload video"""
+        try:
+            # Convert URL path to file path
+            if thumbnail_path.startswith('/api/results/'):
+                file_path = os.path.join(RESULTS_FOLDER, thumbnail_path.replace('/api/results/', ''))
+            else:
+                file_path = thumbnail_path
+            
+            if not os.path.exists(file_path):
+                print(f"Batch thumbnail file not found: {file_path}")
+                return False
+            
+            # Read and send image
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (f'batch_{job_id}.jpg', f, 'image/jpeg')
+                }
+                
+                payload = {
+                    'content': f'📸 Thumbnail from **{filename}**'
+                }
+                
+                response = requests.post(
+                    self.webhook_url,
+                    data=payload,
+                    files=files,
+                    timeout=15
+                )
+                
+                return response.status_code in [200, 204]
+                
+        except Exception as e:
+            print(f"Error sending Discord batch thumbnail: {e}")
+            return False
+    
+    def _send_batch_clip(self, job_id: str, filename: str, clip_path: str) -> bool:
+        """Send video clip for batch upload video"""
+        try:
+            # Convert URL path to file path
+            if clip_path.startswith('/api/results/'):
+                file_path = os.path.join(RESULTS_FOLDER, clip_path.replace('/api/results/', ''))
+            else:
+                file_path = clip_path
+            
+            if not os.path.exists(file_path):
+                print(f"Batch clip file not found: {file_path}")
+                return False
+            
+            # Check file size (Discord has 25MB limit for free accounts)
+            file_size = os.path.getsize(file_path)
+            if file_size > 25 * 1024 * 1024:  # 25MB
+                print(f"Batch clip too large for Discord: {file_size / (1024*1024):.1f}MB")
+                return False
+            
+            # Read and send video
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (f'batch_{job_id}.mp4', f, 'video/mp4')
+                }
+                
+                payload = {
+                    'content': f'🎥 Violence clip from **{filename}**'
+                }
+                
+                response = requests.post(
+                    self.webhook_url,
+                    data=payload,
+                    files=files,
+                    timeout=30  # Longer timeout for video uploads
+                )
+                
+                return response.status_code in [200, 204]
+                
+        except Exception as e:
+            print(f"Error sending Discord batch clip: {e}")
+            return False
+    
+    def send_incident_summary(self, 
+                             incident_id: str,
+                             stream_name: str, 
+                             duration: float, 
+                             detection_count: int, 
+                             avg_confidence: float,
+                             clip_url: str = None):
+        """Send incident summary when incident is finalized"""
+        
+        if not self.enabled:
+            return False
+            
+        try:
+            embed = {
+                "title": "📋 INCIDENT SUMMARY",
+                "description": f"Violence incident concluded in **{stream_name}**",
+                "color": 0x4CAF50,  # Green
+                "timestamp": datetime.now().isoformat(),
+                "fields": [
+                    {
+                        "name": "Incident ID",
+                        "value": f"`{incident_id}`",
+                        "inline": False
+                    },
+                    {
+                        "name": "Duration",
+                        "value": f"**{duration:.1f} seconds**",
+                        "inline": True
+                    },
+                    {
+                        "name": "Detections",
+                        "value": f"**{detection_count}** alerts",
+                        "inline": True
+                    },
+                    {
+                        "name": "Avg Confidence",
+                        "value": f"**{avg_confidence:.1%}**",
+                        "inline": True
+                    }
+                ],
+                "footer": {
+                    "text": "Incident processed and archived"
+                }
+            }
+            
+            if clip_url:
+                embed["fields"].append({
+                    "name": "Video Clip",
+                    "value": f"[View Incident Recording]({clip_url})",
+                    "inline": False
+                })
+            
+            payload = {
+                "content": f"✅ Incident **{incident_id}** has been processed and archived.",
+                "embeds": [embed]
+            }
+            
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                timeout=10
+            )
+            
+            return response.status_code in [200, 204]
+            
+        except Exception as e:
+            print(f"Error sending Discord incident summary: {e}")
+            return False
+    
+    def send_batch_upload_start(self, batch_id: str, video_count: int, video_names: List[str]):
+        """Send notification when multiple videos are uploaded for batch processing"""
+        
+        if not self.enabled:
+            return False
+            
+        try:
+            # Truncate video list if too long
+            display_videos = video_names[:5]
+            more_count = len(video_names) - 5
+            
+            video_list = "• " + "\n• ".join(display_videos)
+            if more_count > 0:
+                video_list += f"\n• ... and {more_count} more videos"
+            
+            embed = {
+                "title": "📁 BATCH UPLOAD STARTED",
+                "description": f"Processing **{video_count} videos** for violence detection",
+                "color": 0x2196F3,  # Blue
+                "timestamp": datetime.now().isoformat(),
+                "fields": [
+                    {
+                        "name": "Batch ID",
+                        "value": f"`{batch_id}`",
+                        "inline": True
+                    },
+                    {
+                        "name": "Video Count",
+                        "value": f"**{video_count}** files",
+                        "inline": True
+                    },
+                    {
+                        "name": "Status",
+                        "value": "🟡 **Processing**",
+                        "inline": True
+                    },
+                    {
+                        "name": "Videos",
+                        "value": video_list,
+                        "inline": False
+                    }
+                ],
+                "footer": {
+                    "text": "Multi-Video Analysis Pipeline"
+                }
+            }
+            
+            content = ""
+            if DISCORD_MENTION_EVERYONE:
+                content = "@everyone "
+            
+            content += f"📋 **Batch Upload**: {video_count} videos queued for analysis"
+            
+            payload = {
+                "content": content,
+                "embeds": [embed]
+            }
+            
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code in [200, 204]:
+                print(f"Discord batch start notification sent for {video_count} videos")
+                return True
+            else:
+                print(f"Discord batch webhook failed: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"Error sending Discord batch start notification: {e}")
+            return False
+    
+    def send_batch_video_complete(self, batch_id: str, video_name: str, completed_count: int, 
+                                 total_count: int, has_violence: bool, confidence: float = None,
+                                 job_id: str = None, thumbnail_path: str = None, 
+                                 clip_paths: List[str] = None):
+        """Send notification when an individual video in batch completes - WITH MEDIA"""
+        
+        if not self.enabled:
+            return False
+            
+        try:
+            # Progress calculation
+            progress_percent = (completed_count / total_count) * 100
+            
+            # Status based on violence detection
+            if has_violence:
+                status_emoji = "🚨"
+                status_text = f"**VIOLENCE DETECTED** ({confidence:.1%})"
+                color = 0xFF6B6B  # Red
+            else:
+                status_emoji = "✅"
+                status_text = "**No Violence**"
+                color = 0x4CAF50  # Green
+            
+            embed = {
+                "title": f"{status_emoji} VIDEO ANALYSIS COMPLETE",
+                "description": f"Video **{completed_count}** of **{total_count}** processed",
+                "color": color,
+                "timestamp": datetime.now().isoformat(),
+                "fields": [
+                    {
+                        "name": "Video File",
+                        "value": f"`{video_name}`",
+                        "inline": False
+                    },
+                    {
+                        "name": "Result",
+                        "value": status_text,
+                        "inline": True
+                    },
+                    {
+                        "name": "Progress",
+                        "value": f"**{completed_count}/{total_count}** ({progress_percent:.0f}%)",
+                        "inline": True
+                    },
+                    {
+                        "name": "Batch ID",
+                        "value": f"`{batch_id}`",
+                        "inline": True
+                    }
+                ],
+                "footer": {
+                    "text": f"Job ID: {job_id}" if job_id else "Multi-Video Analysis"
+                }
+            }
+            
+            # Add view link if job_id provided
+            if job_id:
+                embed["fields"].append({
+                    "name": "View Results",
+                    "value": f"[Open Dashboard](http://localhost:8000/dashboard?job={job_id})",
+                    "inline": False
+                })
+            
+            payload = {"embeds": [embed]}
+            
+            # Send main notification
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code in [200, 204]:
+                print(f"Discord batch video complete notification sent for {video_name}")
+                
+                # Send thumbnail if available
+                if thumbnail_path and self._send_batch_thumbnail(job_id, video_name, thumbnail_path):
+                    print(f"Discord batch thumbnail sent for {video_name}")
+                
+                # Send violence clips if available (only for violent videos)
+                if has_violence and clip_paths:
+                    for clip_path in clip_paths[:2]:  # Limit to 2 clips to avoid spam
+                        if self._send_batch_clip(job_id, video_name, clip_path):
+                            print(f"Discord batch clip sent for {video_name}")
+                
+                return True
+            else:
+                print(f"Discord batch video webhook failed: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"Error sending Discord batch video complete notification: {e}")
+            return False
+    
+    def send_batch_complete_summary(self, batch_id: str, total_videos: int, violence_count: int, 
+                                   processing_time: float, video_results: List[Dict]):
+        """Send final summary when entire batch is complete - WITH SAMPLE MEDIA"""
+        
+        if not self.enabled:
+            return False
+            
+        try:
+            # Calculate statistics
+            violence_rate = (violence_count / total_videos) * 100 if total_videos > 0 else 0
+            safe_count = total_videos - violence_count
+            
+            # Determine overall alert level
+            if violence_count == 0:
+                alert_emoji = "✅"
+                alert_title = "BATCH COMPLETE - ALL SAFE"
+                color = 0x4CAF50  # Green
+            elif violence_count == total_videos:
+                alert_emoji = "🚨"
+                alert_title = "BATCH COMPLETE - ALL VIOLENT"
+                color = 0xFF6B6B  # Red
+            else:
+                alert_emoji = "⚠️"
+                alert_title = "BATCH COMPLETE - MIXED RESULTS"
+                color = 0xFF9500  # Orange
+            
+            embed = {
+                "title": f"{alert_emoji} {alert_title}",
+                "description": f"Analysis complete for **{total_videos} videos**",
+                "color": color,
+                "timestamp": datetime.now().isoformat(),
+                "fields": [
+                    {
+                        "name": "Batch ID",
+                        "value": f"`{batch_id}`",
+                        "inline": False
+                    },
+                    {
+                        "name": "🚨 Violence Detected",
+                        "value": f"**{violence_count}** videos ({violence_rate:.0f}%)",
+                        "inline": True
+                    },
+                    {
+                        "name": "✅ Safe Videos",
+                        "value": f"**{safe_count}** videos ({100-violence_rate:.0f}%)",
+                        "inline": True
+                    },
+                    {
+                        "name": "⏱️ Processing Time",
+                        "value": f"**{processing_time:.1f}** seconds",
+                        "inline": True
+                    }
+                ],
+                "footer": {
+                    "text": "Multi-Video Analysis Complete"
+                }
+            }
+            
+            # Add detailed results if not too many
+            if len(video_results) <= 8:
+                results_text = ""
+                for result in video_results:
+                    status_icon = "🚨" if result['has_violence'] else "✅"
+                    conf_text = f" ({result['confidence']:.1%})" if result['has_violence'] else ""
+                    results_text += f"{status_icon} `{result['filename']}`{conf_text}\n"
+                
+                embed["fields"].append({
+                    "name": "📋 Detailed Results",
+                    "value": results_text,
+                    "inline": False
+                })
+            
+            # Add multi-analysis dashboard link
+            job_ids = [r.get('job_id', '') for r in video_results if r.get('job_id')]
+            if job_ids:
+                jobs_param = ','.join(job_ids)
+                embed["fields"].append({
+                    "name": "📊 View All Results",
+                    "value": f"[Open Multi-Analysis Dashboard](http://localhost:8000/multi-analysis?jobs={jobs_param})",
+                    "inline": False
+                })
+            
+            content = ""
+            if DISCORD_MENTION_EVERYONE and violence_count > 0:
+                content = "@everyone "
+            
+            if violence_count > 0:
+                content += f"🚨 **ALERT**: {violence_count}/{total_videos} videos contain violence!"
+            else:
+                content += f"✅ **ALL CLEAR**: All {total_videos} videos are safe."
+            
+            payload = {
+                "content": content,
+                "embeds": [embed]
+            }
+            
+            # Send main summary
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code in [200, 204]:
+                print(f"Discord batch summary sent for {total_videos} videos")
+                
+                # Send sample thumbnails/clips from violent videos (limit to avoid spam)
+                violent_results = [r for r in video_results if r.get('has_violence', False)]
+                
+                if violent_results:
+                    # Send up to 2 sample thumbnails from highest confidence detections
+                    violent_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+                    
+                    for i, result in enumerate(violent_results[:2]):
+                        job_id = result.get('job_id')
+                        filename = result.get('filename', 'unknown')
+                        
+                        if job_id:
+                            # Try to send thumbnail and one clip from this high-confidence detection
+                            try:
+                                # Look for thumbnail in results folder
+                                thumbnail_path = os.path.join(RESULTS_FOLDER, f"{job_id}_thumbnail.jpg")
+                                if os.path.exists(thumbnail_path):
+                                    if self._send_batch_thumbnail(job_id, f"Sample #{i+1}: {filename}", f"/api/results/{job_id}_thumbnail.jpg"):
+                                        print(f"Sent sample thumbnail #{i+1} for batch summary")
+                                
+                                # Look for clips in clips folder
+                                clips_folder = os.path.join(RESULTS_FOLDER, "clips")
+                                if os.path.exists(clips_folder):
+                                    for clip_file in os.listdir(clips_folder):
+                                        if clip_file.startswith(job_id):
+                                            clip_path = f"/api/results/clips/{clip_file}"
+                                            if self._send_batch_clip(job_id, f"Sample clip: {filename}", clip_path):
+                                                print(f"Sent sample clip for batch summary: {filename}")
+                                                break  # Only send one clip per video
+                                            
+                            except Exception as e:
+                                print(f"Error sending sample media for batch summary: {e}")
+                
+                return True
+            else:
+                print(f"Discord batch summary webhook failed: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"Error sending Discord batch summary: {e}")
+            return False
+    
+    def send_system_status(self, message: str, status_type: str = "info"):
+        """Send system status messages"""
+        
+        if not self.enabled:
+            return False
+            
+        try:
+            color_map = {
+                "info": 0x2196F3,     # Blue
+                "warning": 0xFF9800,  # Orange  
+                "error": 0xF44336,    # Red
+                "success": 0x4CAF50   # Green
+            }
+            
+            emoji_map = {
+                "info": "ℹ️",
+                "warning": "⚠️", 
+                "error": "❌",
+                "success": "✅"
+            }
+            
+            embed = {
+                "title": f"{emoji_map.get(status_type, 'ℹ️')} System Status",
+                "description": message,
+                "color": color_map.get(status_type, 0x2196F3),
+                "timestamp": datetime.now().isoformat(),
+                "footer": {
+                    "text": "Violence Detection System"
+                }
+            }
+            
+            payload = {"embeds": [embed]}
+            
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                timeout=10
+            )
+            
+            return response.status_code in [200, 204]
+            
+        except Exception as e:
+            print(f"Error sending Discord status message: {e}")
+            return False
+
+def create_batch_id() -> str:
+    """Generate unique batch ID"""
+    return f"batch_{int(time.time())}_{str(uuid.uuid4())[:8]}"
+
+def track_batch_upload(batch_id: str, job_ids: List[str], filenames: List[str]):
+    """Track a new batch upload"""
+    with batch_lock:
+        batch_uploads[batch_id] = {
+            'job_ids': job_ids,
+            'filenames': filenames,
+            'total_count': len(job_ids),
+            'completed_count': 0,
+            'results': {},
+            'start_time': time.time(),
+            'completed_jobs': set()
+        }
+    print(f"Tracking batch {batch_id} with {len(job_ids)} videos")
+
+def update_batch_completion(job_id: str, result: Dict):
+    """Update batch when a job completes - WITH MEDIA DATA"""
+    with batch_lock:
+        # Find which batch this job belongs to
+        for batch_id, batch_data in batch_uploads.items():
+            if job_id in batch_data['job_ids'] and job_id not in batch_data['completed_jobs']:
+                batch_data['completed_jobs'].add(job_id)
+                batch_data['completed_count'] += 1
+                batch_data['results'][job_id] = result
+                
+                # Get filename for this job
+                job_index = batch_data['job_ids'].index(job_id)
+                filename = batch_data['filenames'][job_index]
+                
+                # Prepare media paths for Discord
+                thumbnail_path = result.get('thumbnail', '')
+                clip_paths = []
+                
+                # Extract clip paths from segments if violence was detected
+                if result.get('has_violence', False) and 'segments' in result:
+                    for i, segment in enumerate(result['segments']):
+                        # Look for clips in the results folder
+                        clip_filename = f"{job_id}_clip_{i}.mp4"
+                        clip_path = os.path.join(RESULTS_FOLDER, "clips", clip_filename)
+                        if os.path.exists(clip_path):
+                            clip_paths.append(f"/api/results/clips/{clip_filename}")
+                
+                # Send individual completion notification WITH MEDIA
+                if discord_notifier and discord_notifier.enabled:
+                    discord_notifier.send_batch_video_complete(
+                        batch_id=batch_id,
+                        video_name=filename,
+                        completed_count=batch_data['completed_count'],
+                        total_count=batch_data['total_count'],
+                        has_violence=result.get('has_violence', False),
+                        confidence=result.get('overall_result', {}).get('confidence', 0),
+                        job_id=job_id,
+                        thumbnail_path=thumbnail_path,  # NEW: Pass thumbnail
+                        clip_paths=clip_paths  # NEW: Pass clip paths
+                    )
+                
+                # Check if batch is complete
+                if batch_data['completed_count'] >= batch_data['total_count']:
+                    finalize_batch(batch_id)
+                
+                break
+
+def finalize_batch(batch_id: str):
+    """Send final batch summary and cleanup"""
+    batch_data = batch_uploads.get(batch_id)
+    if not batch_data:
+        return
+    
+    # Calculate final statistics
+    processing_time = time.time() - batch_data['start_time']
+    violence_count = sum(1 for result in batch_data['results'].values() 
+                         if result.get('has_violence', False))
+    
+    # Prepare results for summary
+    video_results = []
+    for i, job_id in enumerate(batch_data['job_ids']):
+        result = batch_data['results'].get(job_id, {})
+        video_results.append({
+            'filename': batch_data['filenames'][i],
+            'job_id': job_id,
+            'has_violence': result.get('has_violence', False),
+            'confidence': result.get('overall_result', {}).get('confidence', 0)
+        })
+    
+    # Send final summary
+    if discord_notifier and discord_notifier.enabled:
+        discord_notifier.send_batch_complete_summary(
+            batch_id=batch_id,
+            total_videos=batch_data['total_count'],
+            violence_count=violence_count,
+            processing_time=processing_time,
+            video_results=video_results
+        )
+    
+    # Cleanup
+    del batch_uploads[batch_id]
+    print(f"Finalized batch {batch_id}: {violence_count}/{batch_data['total_count']} videos had violence")
+
+# Cleanup old batches periodically
+def cleanup_old_batches():
+    """Remove batch tracking for very old batches (in case of missed completions)"""
+    current_time = time.time()
+    with batch_lock:
+        to_remove = []
+        for batch_id, batch_data in batch_uploads.items():
+            # Remove batches older than 2 hours
+            if current_time - batch_data['start_time'] > 7200:
+                to_remove.append(batch_id)
+        
+        for batch_id in to_remove:
+            del batch_uploads[batch_id]
+            print(f"Cleaned up old batch: {batch_id}")
+
 # Create folders
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULTS_FOLDER, exist_ok=True)
@@ -855,6 +1659,9 @@ results_history: Dict[str, dict] = {}
 # Initialize database - moved to startup to avoid blocking
 event_db = None
 stitching_manager = None
+discord_notifier = None
+batch_uploads = {}
+batch_lock = threading.Lock()
 
 # WebSocket connections for real-time updates
 class ConnectionManager:
@@ -1693,6 +2500,21 @@ class RTSPStreamProcessor:
                     'incident_status': incident_status,
                     'is_ongoing_incident': should_stitch
                 }))
+                
+                # ADD THIS DISCORD NOTIFICATION BLOCK
+                # Send Discord notification
+                if discord_notifier and discord_notifier.enabled:
+                    discord_notifier.send_violence_alert(
+                        stream_id=self.stream_id,
+                        stream_name=self.stream_name,
+                        confidence=confidence,
+                        timestamp=timestamp_str,
+                        thumbnail_path=thumbnail_url,
+                        clip_path=clip_url,
+                        incident_id=incident_id,
+                        is_ongoing=should_stitch
+                    )
+                
                 loop.close()
             except Exception as e:
                 print(f"Error sending violence detection WebSocket update: {e}")
@@ -1819,6 +2641,7 @@ async def periodic_cleanup():
         await asyncio.sleep(3600)  # 1 hour
         try:
             await cleanup_old_jobs()
+            cleanup_old_batches()
         except Exception as e:
             print(f"Error during periodic cleanup: {e}")
 
@@ -1834,17 +2657,25 @@ async def cleanup_uploaded_file(file_path: str, delay_hours: int = FILE_CLEANUP_
 
 @app.on_event("startup")
 async def startup_event():
-    global model, event_db, stream_db
+    global model, event_db, stream_db, stitching_manager, discord_notifier
     try:
         print("Starting up Violence Detection API...")
 
         # Initialize databases
         print("Initializing databases...")
-        global event_db, stream_db, stitching_manager
         event_db = EventDatabase()
         stream_db = StreamDatabase()
         stitching_manager = EventStitchingManager()
         print("Databases and stitching manager initialized successfully")
+
+        # Initialize Discord notifier - ADD THIS BLOCK
+        print("Initializing Discord notifications...")
+        discord_notifier = DiscordNotifier(DISCORD_WEBHOOK_URL, DISCORD_NOTIFICATIONS_ENABLED)
+        if discord_notifier.enabled:
+            discord_notifier.send_system_status(
+                "Violence Detection System started successfully! 🚀", 
+                "success"
+            )
 
         # Recover stream states from previous shutdown
         recover_stream_states()
@@ -2253,6 +3084,20 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
         except Exception as e:
             print(f"Error saving history: {e}")
 
+        # BATCH COMPLETION TRACKING WITH MEDIA DATA
+        if 'batch_id' in active_jobs[job_id]:
+            batch_result = {
+                'has_violence': has_violence,
+                'overall_result': {
+                    'confidence': float(overall_confidence)
+                },
+                'job_id': job_id,
+                'filename': os.path.basename(video_path),
+                'thumbnail': active_jobs[job_id]['thumbnail'],  # Include thumbnail path
+                'segments': segments  # Include segments for clip detection
+            }
+            update_batch_completion(job_id, batch_result)
+
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -2267,6 +3112,19 @@ def process_video_sync(job_id: str, video_path: str, threshold: float = None):
             loop.close()
         except:
             pass
+
+        # BATCH ERROR TRACKING WITH EMPTY MEDIA
+        if job_id in active_jobs and 'batch_id' in active_jobs[job_id]:
+            error_result = {
+                'has_violence': False,
+                'overall_result': {'confidence': 0.0},
+                'job_id': job_id,
+                'filename': 'Error processing',
+                'error': str(e),
+                'thumbnail': '',  # Empty thumbnail for errors
+                'segments': []    # Empty segments for errors
+            }
+            update_batch_completion(job_id, error_result)
 
 # API Routes
 @app.get("/")
@@ -2522,6 +3380,104 @@ async def upload_file(
 
     raise HTTPException(status_code=400, detail="No file or valid path provided")
 
+@app.post("/api/upload-batch")
+@limiter.limit("5/minute")
+async def upload_batch(
+    request: Request,
+    files: List[UploadFile] = File(...),
+):
+    """Handle multiple file uploads with batch tracking"""
+    
+    # Check active jobs limit
+    active_count = sum(1 for job in active_jobs.values()
+                       if job['status'] in ['queued', 'processing'])
+    if active_count >= 10:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many active jobs ({active_count}/10). Please wait."
+        )
+    
+    # Validate all files first
+    validated_files = []
+    for file in files:
+        if not file.filename or not allowed_file(file.filename):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid file type: {file.filename}"
+            )
+        
+        # Check file size
+        file.file.seek(0, 2)  # Seek to end
+        size = file.file.tell()
+        file.file.seek(0)  # Reset
+        
+        if size > MAX_CONTENT_LENGTH:
+            raise HTTPException(
+                status_code=413, 
+                detail=f"File too large: {file.filename}"
+            )
+        
+        validated_files.append((file, size))
+    
+    # Create batch tracking
+    batch_id = create_batch_id()
+    job_ids = []
+    filenames = []
+    
+    try:
+        # Process all files
+        for file, size in validated_files:
+            job_id = str(uuid.uuid4())
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_{filename}")
+            
+            # Save file
+            contents = await file.read()
+            with open(file_path, "wb") as f:
+                f.write(contents)
+            
+            # Create job
+            active_jobs[job_id] = {
+                'id': job_id,
+                'file_path': file_path,
+                'filename': filename,
+                'status': 'queued',
+                'progress': 0,
+                'message': 'Queued for processing',
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'batch_id': batch_id  # Add batch tracking
+            }
+            
+            job_ids.append(job_id)
+            filenames.append(filename)
+        
+        # Track batch
+        track_batch_upload(batch_id, job_ids, filenames)
+        
+        # Send Discord batch start notification
+        if discord_notifier and discord_notifier.enabled:
+            discord_notifier.send_batch_upload_start(batch_id, len(job_ids), filenames)
+        
+        # Start processing all videos
+        for job_id, (_, _) in zip(job_ids, validated_files):
+            job_data = active_jobs[job_id]
+            threading.Thread(target=process_video_sync, args=(job_id, job_data['file_path'])).start()
+        
+        return {
+            "success": True,
+            "message": f"Batch upload successful - {len(job_ids)} videos queued",
+            "batch_id": batch_id,
+            "job_ids": job_ids
+        }
+        
+    except Exception as e:
+        # Cleanup on error
+        for job_id in job_ids:
+            if job_id in active_jobs:
+                del active_jobs[job_id]
+        
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/job/{job_id}", response_model=JobStatus)
 async def get_job(job_id: str):
     """Get job status"""
@@ -2540,6 +3496,40 @@ async def get_job(job_id: str):
         thumbnail=job.get('thumbnail'),
         result=job.get('result')
     )
+
+@app.get("/api/batch/{batch_id}")
+async def get_batch_status(batch_id: str):
+    """Get status of a batch upload"""
+    try:
+        with batch_lock:
+            if batch_id not in batch_uploads:
+                raise HTTPException(status_code=404, detail="Batch not found")
+            
+            batch_data = batch_uploads[batch_id]
+            
+            # Get current status of all jobs
+            job_statuses = []
+            for job_id in batch_data['job_ids']:
+                if job_id in active_jobs:
+                    job = active_jobs[job_id]
+                    job_statuses.append({
+                        'job_id': job_id,
+                        'filename': job['filename'],
+                        'status': job['status'],
+                        'progress': job['progress']
+                    })
+            
+            return {
+                'batch_id': batch_id,
+                'total_count': batch_data['total_count'],
+                'completed_count': batch_data['completed_count'],
+                'progress_percent': (batch_data['completed_count'] / batch_data['total_count']) * 100,
+                'is_complete': batch_data['completed_count'] >= batch_data['total_count'],
+                'job_statuses': job_statuses
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/result/{job_id}")
 async def get_result(job_id: str):
@@ -2709,7 +3699,7 @@ async def get_clip_file(filename: str, request: Request):
                     iterfile(file_path, start, end),
                     status_code=206,
                     headers=headers,
-                    media_type=media_type  # or 'video/mp4' for video files
+                    media_type='video/mp4'
                 )
 
     # Regular response
@@ -2801,9 +3791,25 @@ async def start_stream(stream_id: int):
 
         if processor.start_stream():
             stream_db.update_stream_status(stream_id, 'active')
+            
+            # ADD THIS DISCORD NOTIFICATION
+            if discord_notifier and discord_notifier.enabled:
+                discord_notifier.send_system_status(
+                    f"Stream **{stream_data['name']}** (ID: {stream_id}) started monitoring",
+                    "info"
+                )
+            
             return {"success": True, "message": "Stream started"}
         else:
             stream_db.update_stream_status(stream_id, 'error')
+            
+            # ADD THIS DISCORD ERROR NOTIFICATION  
+            if discord_notifier and discord_notifier.enabled:
+                discord_notifier.send_system_status(
+                    f"Failed to start stream **{stream_data['name']}** (ID: {stream_id})",
+                    "error"
+                )
+            
             return {"success": False, "message": "Failed to start stream"}
 
     except Exception as e:
@@ -3069,7 +4075,7 @@ async def get_stream_statistics():
             GROUP BY source_id
             ORDER BY event_count DESC
             LIMIT 5
-        ''')
+        ''', (yesterday,))
         top_streams_data = cursor.fetchall()
 
         top_streams = []
@@ -3532,6 +4538,7 @@ async def get_stream_event_result(event_id: int):
 @app.options("/api/results/stream_clips/{filename}")
 async def handle_video_options():
     """Handle CORS preflight requests for video endpoints"""
+    from fastapi.responses import Response
     return Response(
         status_code=200,
         headers={

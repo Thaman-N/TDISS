@@ -105,10 +105,10 @@ const UploadInterface = () => {
     }, 300)
 
     if (uploadState.inputMethod === 'upload' && uploadState.uploadedFiles.length > 0) {
-      // Upload multiple files
-      for (const file of uploadState.uploadedFiles) {
+      if (uploadState.uploadedFiles.length === 1) {
+        // Single file - use existing endpoint
         const formData = new FormData()
-        formData.append('file', file)
+        formData.append('file', uploadState.uploadedFiles[0])
 
         const response = await fetch('/api/upload', {
           method: 'POST',
@@ -117,15 +117,34 @@ const UploadInterface = () => {
 
         if (!response.ok) {
           const errorText = await response.text()
-          throw new Error(`Upload failed for ${file.name}: ${response.status} ${errorText}`)
+          throw new Error(`Upload failed: ${response.status} ${errorText}`)
         }
 
         const result = await response.json()
         if (result.success && result.job_id) {
           jobIds.push(result.job_id)
         }
-        
-        completedFiles++
+      } else {
+        // Multiple files - use batch endpoint
+        const formData = new FormData()
+        for (const file of uploadState.uploadedFiles) {
+          formData.append('files', file)  // Note: 'files' plural
+        }
+
+        const response = await fetch('/api/upload-batch', {  // Batch endpoint
+          method: 'POST',
+          body: formData
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`Batch upload failed: ${response.status} ${errorText}`)
+        }
+
+        const result = await response.json()
+        if (result.success && result.job_ids) {
+          jobIds.push(...result.job_ids)  // Spread array of job IDs
+        }
       }
     } else if (uploadState.inputMethod === 'path' && uploadState.localPath.trim()) {
       // Single local path
