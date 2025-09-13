@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 
 const ALLOWED_FORMATS = ['mp4', 'avi', 'mov', 'mkv']
-const MAX_FILE_SIZE = 500 * 1024 * 1024 // 500MB
+const MAX_FILE_SIZE = 4*500 * 1024 * 1024 // 500MB changed to 2 GB
 
 const UploadInterface = () => {
   const navigate = useNavigate()
