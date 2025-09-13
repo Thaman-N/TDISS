@@ -145,11 +145,22 @@ class EventStitchingManager:
                 total_duration <= self.max_incident_duration)
     
     def start_new_incident(self, stream_id: int, stream_name: str, current_time: float, 
-                          confidence: float, frame_buffer: List[np.ndarray], event_id: int) -> str:
-        """Start a new incident with recent frame history"""
+                        confidence: float, frame_buffer: List[np.ndarray], event_id: int) -> str:
+        """Start a new incident with recent frame history - IMPROVED VERSION"""
         incident_id = f"incident_{stream_id}_{int(current_time)}"
         
         with self._lock:
+            # Verify the event_id exists before creating incident
+            try:
+                conn = sqlite3.connect(event_db.db_path)
+                cursor = conn.cursor()
+                cursor.execute('SELECT id FROM violence_events WHERE id = ?', (event_id,))
+                if not cursor.fetchone():
+                    print(f"Warning: Event {event_id} not found in database")
+                conn.close()
+            except Exception as e:
+                print(f"Error verifying event {event_id}: {e}")
+            
             self.active_incidents[stream_id] = ActiveIncident(
                 incident_id=incident_id,
                 stream_id=stream_id,
@@ -169,7 +180,7 @@ class EventStitchingManager:
             # Start new finalization timer
             self._schedule_incident_finalization(stream_id)
             
-        print(f"Started new incident {incident_id} for stream {stream_id}")
+        print(f"Started new incident {incident_id} for stream {stream_id} with event {event_id}")
         return incident_id
     
     def extend_incident(self, stream_id: int, current_time: float, 
@@ -205,32 +216,37 @@ class EventStitchingManager:
         timer.start()
     
     def finalize_incident(self, stream_id: int):
-        """Finalize incident by creating stitched clip and updating events"""
+        """Finalize incident by creating stitched clip and updating events - IMPROVED VERSION"""
         with self._lock:
             if stream_id not in self.active_incidents:
+                print(f"No active incident found for stream {stream_id}")
                 return
                 
             incident = self.active_incidents[stream_id]
-            print(f"Finalizing incident {incident.incident_id}")
+            print(f"Finalizing incident {incident.incident_id} for stream {stream_id}")
             
             try:
                 # Create stitched video clip
                 stitched_clip_path = self._create_stitched_clip(incident)
+                print(f"Stitched clip created: {stitched_clip_path}")
                 
-                # Update all related events in database
-                self._update_incident_events(incident, stitched_clip_path)
+                # Update all related events in database WITH improved error handling
+                success = self._update_incident_events(incident, stitched_clip_path)
                 
-                # Send finalization notification
-                self._send_incident_finalized_notification(incident, stitched_clip_path)
-                
-                print(f"Finalized incident {incident.incident_id} with {len(incident.event_ids)} events")
+                if success:
+                    # Send finalization notification only if database update succeeded
+                    self._send_incident_finalized_notification(incident, stitched_clip_path)
+                    print(f"Successfully finalized incident {incident.incident_id} with {len(incident.event_ids)} events")
+                else:
+                    print(f"Database update failed for incident {incident.incident_id}")
+                    # Could retry here or send error notification
                 
             except Exception as e:
                 print(f"Error finalizing incident {incident.incident_id}: {e}")
                 import traceback
                 traceback.print_exc()
             finally:
-                # Clean up
+                # Always clean up the active incident
                 del self.active_incidents[stream_id]
                 if stream_id in self.finalization_timers:
                     del self.finalization_timers[stream_id]
@@ -286,21 +302,28 @@ class EventStitchingManager:
             traceback.print_exc()
             return ""
     
-    def _update_incident_events(self, incident: ActiveIncident, stitched_clip_path: str):
-        """Update all events in this incident with final data"""
+    def _update_incident_events(self, incident, stitched_clip_path):
+        """Update individual events and create stitched incident record - IMPROVED VERSION"""
         if not incident.event_ids:
+            print(f"Warning: No event_ids for incident {incident.incident_id}")
             return
             
+        print(f"Processing incident {incident.incident_id} with {len(incident.event_ids)} events")
+        
+        # Use event_db connection to ensure consistency
         conn = sqlite3.connect(event_db.db_path)
         cursor = conn.cursor()
         
         try:
+            # Start explicit transaction
+            cursor.execute('BEGIN TRANSACTION')
+            
             # Calculate final incident data
             total_duration = incident.last_detection_time - incident.start_time
             avg_confidence = sum(incident.confidence_scores) / len(incident.confidence_scores)
+            max_confidence = max(incident.confidence_scores)
             
-            # Keep only the FIRST event as the primary incident record
-            primary_event_id = incident.event_ids[0]
+            print(f"Incident stats: {total_duration:.1f}s, {avg_confidence:.3f} avg conf, {len(incident.event_ids)} events")
             
             # Create timeline segments from detection timestamps
             timeline_segments = []
@@ -310,47 +333,64 @@ class EventStitchingManager:
                     'start': relative_time,
                     'end': relative_time + 3.0,  # detection_interval
                     'confidence': confidence,
-                    'detection_number': i + 1
+                    'detection_number': i + 1,
+                    'absolute_timestamp': timestamp
                 })
             
-            # Enhanced metadata with timeline
-            enhanced_metadata = json.dumps({
-                'stream_name': incident.stream_name,
-                'detection_type': 'stitched_incident',
-                'total_detections': len(incident.confidence_scores),
-                'timeline_segments': timeline_segments,
-                'incident_duration': total_duration,
-                'pipeline_version': 'stitched_stream_v3'
-            })
+            # STEP 1: Update individual events to 'completed' status
+            updated_count = 0
+            for event_id in incident.event_ids:
+                cursor.execute('''
+                    UPDATE violence_events 
+                    SET incident_status = 'completed',
+                        incident_id = ?
+                    WHERE id = ?
+                ''', (incident.incident_id, event_id))
+                
+                if cursor.rowcount == 0:
+                    print(f"Warning: Event {event_id} not found or not updated")
+                else:
+                    updated_count += 1
             
-            # Update primary event with full incident data
+            print(f"Updated {updated_count}/{len(incident.event_ids)} events to completed status")
+            
+            if updated_count == 0:
+                raise Exception(f"Failed to update any events for incident {incident.incident_id}")
+            
+            # STEP 2: Create stitched incident record using the SAME connection
+            start_timestamp = datetime.fromtimestamp(incident.start_time).strftime('%Y-%m-%d %H:%M:%S')
+            end_timestamp = datetime.fromtimestamp(incident.last_detection_time).strftime('%Y-%m-%d %H:%M:%S')
+            event_ids_json = json.dumps(incident.event_ids)
+            timeline_json = json.dumps(timeline_segments)
+            
             cursor.execute('''
-                UPDATE violence_events 
-                SET incident_status = 'completed',
-                    incident_id = ?,
-                    clip_path = ?,
-                    end_time = ?,
-                    duration = ?,
-                    confidence = ?,
-                    filename = ?,
-                    metadata = ?
-                WHERE id = ?
-            ''', (incident.incident_id, stitched_clip_path, 
-                 incident.start_time + total_duration, total_duration, 
-                 avg_confidence, f"{incident.stream_name} (Incident)", enhanced_metadata, primary_event_id))
+                INSERT INTO stitched_incidents 
+                (incident_id, stream_id, stream_name, start_timestamp, end_timestamp, 
+                total_duration, detection_count, avg_confidence, max_confidence, 
+                stitched_clip_path, timeline_data, event_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                incident.incident_id, incident.stream_id, incident.stream_name, 
+                start_timestamp, end_timestamp, total_duration, len(incident.confidence_scores),
+                avg_confidence, max_confidence, stitched_clip_path, timeline_json, event_ids_json
+            ))
             
-            # DELETE the other events - they're redundant in stitched mode
-            if len(incident.event_ids) > 1:
-                other_event_ids = incident.event_ids[1:]
-                placeholders = ','.join(['?' for _ in other_event_ids])
-                cursor.execute(f'DELETE FROM violence_events WHERE id IN ({placeholders})', other_event_ids)
-                print(f"Deleted {len(other_event_ids)} redundant events for incident {incident.incident_id}")
+            stitched_id = cursor.lastrowid
+            print(f"Created stitched incident record with ID {stitched_id}")
             
-            conn.commit()
-            print(f"Updated primary event {primary_event_id} for incident {incident.incident_id}")
+            # STEP 3: Commit transaction
+            cursor.execute('COMMIT')
+            print(f"Successfully processed incident {incident.incident_id}: {updated_count} events updated, stitched record created")
+            
+            return True
             
         except Exception as e:
-            print(f"Error updating incident events: {e}")
+            # STEP 4: Rollback on any failure
+            print(f"Error updating incident events for {incident.incident_id}: {e}")
+            cursor.execute('ROLLBACK')
+            import traceback
+            traceback.print_exc()
+            return False
         finally:
             conn.close()
     
@@ -373,16 +413,14 @@ class EventStitchingManager:
                 'avg_confidence': avg_confidence,
                 'detection_count': len(incident.confidence_scores),
                 'stitched_clip': stitched_clip_path,
-                'event_ids': incident.event_ids
+                'event_ids': incident.event_ids,
+                'individual_events_preserved': True  # NEW: Indicate events are preserved
             }))
             
-            # ADD THIS DISCORD INCIDENT SUMMARY BLOCK
-            # Send Discord incident summary
+            # Send Discord incident summary (existing)
             if discord_notifier and discord_notifier.enabled:
-                # Convert relative clip path to full URL if needed
                 full_clip_url = stitched_clip_path
                 if stitched_clip_path and not stitched_clip_path.startswith('http'):
-                    # Assuming you're running on localhost:8000
                     full_clip_url = f"http://localhost:8000{stitched_clip_path}"
                 
                 discord_notifier.send_incident_summary(
@@ -517,7 +555,7 @@ class EventDatabase:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Create events table
+        # Create events table (existing)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS violence_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -538,7 +576,27 @@ class EventDatabase:
             )
         ''')
 
-        # Create daily stats table for fast lookups
+        # NEW: Create stitched incidents table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stitched_incidents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id TEXT UNIQUE NOT NULL,
+                stream_id INTEGER NOT NULL,
+                stream_name TEXT NOT NULL,
+                start_timestamp TEXT NOT NULL,
+                end_timestamp TEXT NOT NULL,
+                total_duration REAL NOT NULL,
+                detection_count INTEGER NOT NULL,
+                avg_confidence REAL NOT NULL,
+                max_confidence REAL NOT NULL,
+                stitched_clip_path TEXT,
+                timeline_data TEXT,
+                event_ids TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Create daily stats table (existing)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS daily_stats (
                 date TEXT PRIMARY KEY,
@@ -549,13 +607,12 @@ class EventDatabase:
             )
         ''')
 
-        # Add new columns if they don't exist (for existing databases)
+        # Add new columns if they don't exist (existing)
         try:
             cursor.execute('ALTER TABLE violence_events ADD COLUMN incident_status TEXT DEFAULT "completed"')
             cursor.execute('ALTER TABLE violence_events ADD COLUMN incident_id TEXT DEFAULT ""')
             print("Added incident tracking columns to existing database")
         except sqlite3.OperationalError:
-            # Columns already exist
             pass
 
         # Create indices for performance
@@ -563,6 +620,8 @@ class EventDatabase:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_source ON violence_events(source_type, source_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_incident ON violence_events(incident_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_date ON daily_stats(date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_stitched_incident ON stitched_incidents(incident_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_stitched_stream ON stitched_incidents(stream_id)')
 
         conn.commit()
         conn.close()
@@ -601,6 +660,84 @@ class EventDatabase:
         conn.commit()
         conn.close()
         return event_id
+
+    def save_stitched_incident(self, incident_id: str, stream_id: int, stream_name: str, 
+                            start_time: float, end_time: float, detection_count: int,
+                            avg_confidence: float, max_confidence: float, stitched_clip_path: str,
+                            timeline_data: str, event_ids: List[int]) -> int:
+        """Save a stitched incident to database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        start_timestamp = datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')
+        end_timestamp = datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')
+        total_duration = end_time - start_time
+        event_ids_json = json.dumps(event_ids)
+
+        cursor.execute('''
+            INSERT INTO stitched_incidents 
+            (incident_id, stream_id, stream_name, start_timestamp, end_timestamp, 
+            total_duration, detection_count, avg_confidence, max_confidence, 
+            stitched_clip_path, timeline_data, event_ids)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            incident_id, stream_id, stream_name, start_timestamp, end_timestamp,
+            total_duration, detection_count, avg_confidence, max_confidence,
+            stitched_clip_path, timeline_data, event_ids_json
+        ))
+
+        incident_record_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return incident_record_id
+
+    def get_stitched_incidents(self, start_date: str = None, end_date: str = None, 
+                            stream_id: int = None, limit: int = 50) -> List[Dict]:
+        """Get stitched incidents with optional filtering"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        query = 'SELECT * FROM stitched_incidents WHERE 1=1'
+        params = []
+        
+        if start_date:
+            query += ' AND start_timestamp >= ?'
+            params.append(start_date)
+        
+        if end_date:
+            query += ' AND end_timestamp <= ?'
+            params.append(end_date)
+        
+        if stream_id:
+            query += ' AND stream_id = ?'
+            params.append(stream_id)
+        
+        query += ' ORDER BY start_timestamp DESC LIMIT ?'
+        params.append(limit)
+        
+        cursor.execute(query, params)
+        incidents = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                'id': row[0],
+                'incident_id': row[1],
+                'stream_id': row[2],
+                'stream_name': row[3],
+                'start_timestamp': row[4],
+                'end_timestamp': row[5],
+                'total_duration': row[6],
+                'detection_count': row[7],
+                'avg_confidence': row[8],
+                'max_confidence': row[9],
+                'stitched_clip_path': row[10],
+                'timeline_data': json.loads(row[11]) if row[11] else [],
+                'event_ids': json.loads(row[12]) if row[12] else [],
+                'created_at': row[13]
+            }
+            for row in incidents
+        ]
 
     def update_daily_processed_count(self, count: int = 1):
         """Update daily processed count"""
@@ -4530,6 +4667,301 @@ async def get_stream_event_result(event_id: int):
         raise
     except Exception as e:
         print(f"Error getting stream event {event_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stitched-incidents")
+async def get_stitched_incidents(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    stream_id: Optional[int] = None,
+    limit: Optional[int] = 50
+):
+    """Get stitched incident summaries with filtering"""
+    try:
+        if not start_date:
+            # Default to last 24 hours
+            start_date = (datetime.now() - timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
+        if not end_date:
+            end_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        incidents = event_db.get_stitched_incidents(start_date, end_date, stream_id, limit)
+        
+        return {
+            'incidents': incidents,
+            'count': len(incidents),
+            'filters': {
+                'start_date': start_date,
+                'end_date': end_date,
+                'stream_id': stream_id
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stitched-incident/{incident_id}")
+async def get_stitched_incident_details(incident_id: str):
+    """Get detailed information about a stitched incident"""
+    try:
+        conn = sqlite3.connect(event_db.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM stitched_incidents WHERE incident_id = ?', (incident_id,))
+        incident = cursor.fetchone()
+        
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        
+        # Get individual events for this incident
+        cursor.execute('''
+            SELECT * FROM violence_events 
+            WHERE incident_id = ? 
+            ORDER BY timestamp ASC
+        ''', (incident_id,))
+        events = cursor.fetchall()
+        
+        conn.close()
+        
+        # Format response
+        incident_data = {
+            'id': incident[0],
+            'incident_id': incident[1],
+            'stream_id': incident[2],
+            'stream_name': incident[3],
+            'start_timestamp': incident[4],
+            'end_timestamp': incident[5],
+            'total_duration': incident[6],
+            'detection_count': incident[7],
+            'avg_confidence': incident[8],
+            'max_confidence': incident[9],
+            'stitched_clip_path': incident[10],
+            'timeline_data': json.loads(incident[11]) if incident[11] else [],
+            'event_ids': json.loads(incident[12]) if incident[12] else [],
+            'individual_events': [
+                {
+                    'id': row[0],
+                    'timestamp': row[1],
+                    'start_time': row[5],
+                    'end_time': row[6],
+                    'duration': row[7],
+                    'confidence': row[8],
+                    'thumbnail_path': row[9],
+                    'clip_path': row[10]
+                }
+                for row in events
+            ]
+        }
+        
+        return incident_data
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stitched-stats")
+async def get_stitched_incident_stats():
+    """Get statistics for stitched incidents"""
+    try:
+        if not event_db:
+            return {
+                'error': 'Database not initialized',
+                'total_incidents': 0,
+                'incidents_24h': 0,
+                'avg_duration': 0,
+                'avg_detections_per_incident': 0
+            }
+
+        conn = sqlite3.connect(event_db.db_path)
+        cursor = conn.cursor()
+
+        # Total incidents
+        cursor.execute("SELECT COUNT(*) FROM stitched_incidents")
+        total_incidents = cursor.fetchone()[0]
+
+        # Incidents in last 24 hours
+        yesterday = (datetime.now() - timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+            SELECT COUNT(*) FROM stitched_incidents 
+            WHERE start_timestamp >= ?
+        ''', (yesterday,))
+        incidents_24h = cursor.fetchone()[0]
+
+        # Average duration
+        cursor.execute("SELECT AVG(total_duration) FROM stitched_incidents")
+        avg_duration_result = cursor.fetchone()[0]
+        avg_duration = avg_duration_result if avg_duration_result else 0
+
+        # Average detections per incident
+        cursor.execute("SELECT AVG(detection_count) FROM stitched_incidents")
+        avg_detections_result = cursor.fetchone()[0]
+        avg_detections_per_incident = avg_detections_result if avg_detections_result else 0
+
+        conn.close()
+
+        return {
+            'total_incidents': total_incidents,
+            'incidents_24h': incidents_24h,
+            'avg_duration': round(avg_duration, 2) if avg_duration else 0,
+            'avg_detections_per_incident': round(avg_detections_per_incident, 1) if avg_detections_per_incident else 0
+        }
+
+    except Exception as e:
+        return {
+            'error': str(e),
+            'total_incidents': 0,
+            'incidents_24h': 0,
+            'avg_duration': 0,
+            'avg_detections_per_incident': 0
+        }
+
+@app.get("/api/incident-health")
+async def check_incident_health():
+    """Check for stuck active incidents"""
+    try:
+        conn = sqlite3.connect(event_db.db_path)
+        cursor = conn.cursor()
+        
+        # Check for old active incidents (> 1 hour old)
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        cursor.execute("""
+            SELECT incident_id, COUNT(*) as event_count, MIN(timestamp) as oldest
+            FROM violence_events 
+            WHERE incident_status = 'active' 
+            AND timestamp < ?
+            GROUP BY incident_id
+        """, (one_hour_ago.strftime('%Y-%m-%d %H:%M:%S'),))
+        
+        stuck_incidents = cursor.fetchall()
+        conn.close()
+        
+        return {
+            'stuck_incidents': len(stuck_incidents),
+            'incidents': [
+                {
+                    'incident_id': row[0],
+                    'event_count': row[1], 
+                    'oldest_event': row[2]
+                } for row in stuck_incidents
+            ]
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+@app.get("/api/incident-result/{incident_id}")
+async def get_incident_result(incident_id: str):
+    """Get incident data formatted for ResultsViewer compatibility"""
+    try:
+        if not event_db:
+            raise HTTPException(status_code=500, detail="Database not initialized")
+            
+        conn = sqlite3.connect(event_db.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM stitched_incidents WHERE incident_id = ?', (incident_id,))
+        incident = cursor.fetchone()
+        conn.close()
+        
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        
+        # Parse timeline data
+        timeline_data = json.loads(incident[11]) if incident[11] else []
+        event_ids = json.loads(incident[12]) if incident[12] else []
+        
+        # Create segments from timeline data
+        segments = []
+        for seg in timeline_data:
+            segments.append({
+                'start': seg['start'],
+                'end': seg['end'], 
+                'confidence': seg['confidence'],
+                'inference_time': 3.0,  # detection_interval
+                'start_formatted': f"{int(seg['start']//60)}:{int(seg['start']%60):02d}",
+                'end_formatted': f"{int(seg['end']//60)}:{int(seg['end']%60):02d}"
+            })
+        
+        # Format result to match ResultsViewer expectations
+        result = {
+            'job_id': f"incident_{incident[0]}",
+            'filename': f"{incident[3]} - Security Incident",  # stream_name
+            'timestamp': incident[4],  # start_timestamp
+            'has_violence': True,
+            'video_path': incident[10] if incident[10] else None,  # stitched_clip_path
+            'clip_path': incident[10] if incident[10] else None,
+            'thumbnail': incident[10].replace('.mp4', '_thumb.jpg') if incident[10] else None,
+            'incident_id': incident[1],  # incident_id
+            'incident_status': 'completed',
+            
+            # Overall result info
+            'overall_result': {
+                'is_fight': True,
+                'confidence': float(incident[9]),  # max_confidence
+                'inference_time': incident[6],  # total_duration
+                'first_violence_inference_time': 3.0,
+                'total_processing_time': incident[6],
+                'sequences_processed': incident[7]  # detection_count
+            },
+            
+            # Segments data
+            'segments': segments,
+            'violence_duration': incident[6],  # total_duration
+            'violence_percentage': 100.0,
+            
+            # Metadata for video player
+            'metadata': {
+                'duration': incident[6],  # total_duration
+                'duration_formatted': f"{int(incident[6]//60)}:{int(incident[6]%60):02d}",
+                'width': 640,
+                'height': 480,
+                'fps': 4.0,
+                'frame_count': int(incident[6] * 4.0),
+                'source_type': 'stitched_incident',
+                'timeline_segments': timeline_data,
+                'total_detections': incident[7]  # detection_count
+            },
+            
+            # Model information
+            'model_info': {
+                'architecture': 'X3D-M (Stitched Incident)',
+                'motion_enhancement': True,
+                'input_frames': 16,
+                'input_resolution': '336x336',
+                'analysis_method': 'incident_stitching',
+                'hop_seconds': 3.0,
+                'total_sequences_processed': incident[7],
+                'source_stream': incident[3],  # stream_name
+                'stream_id': incident[2]  # stream_id
+            },
+            
+            # Incident-specific metadata
+            'incident_metadata': {
+                'incident_id': incident[1],
+                'stream_id': incident[2],
+                'stream_name': incident[3],
+                'start_timestamp': incident[4],
+                'end_timestamp': incident[5],
+                'detection_count': incident[7],
+                'avg_confidence': incident[8],
+                'max_confidence': incident[9],
+                'individual_events': len(event_ids),
+                'event_ids': event_ids
+            },
+            
+            # Processing statistics
+            'processing_stats': {
+                'total_sequences': incident[7],
+                'violent_sequences': incident[7],
+                'total_inference_time': incident[6],
+                'first_violence_time': 3.0,
+                'avg_inference_per_sequence': incident[6] / incident[7] if incident[7] > 0 else 0
+            }
+        }
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting incident result {incident_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.options("/api/uploads/{filename}")

@@ -44,7 +44,8 @@ import {
 import { format } from 'date-fns'
 
 const ResultsViewer = () => {
-  const { jobId } = useParams()
+  const { jobId, incidentId } = useParams()
+  const actualJobId = jobId || `incident-${incidentId}`
   const navigate = useNavigate()
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -64,12 +65,15 @@ const ResultsViewer = () => {
     try {
       let response;
       
-      // Check if this is a stream event or regular job
-      if (jobId.startsWith('stream-event-')) {
-        const eventId = jobId.replace('stream-event-', '')
+      // Check if this is an incident, stream event, or regular job
+      if (actualJobId.startsWith('incident-')) {
+        const incidentIdFromUrl = actualJobId.replace('incident-', '')
+        response = await fetch(`/api/incident-result/${incidentIdFromUrl}`)
+      } else if (actualJobId.startsWith('stream-event-')) {
+        const eventId = actualJobId.replace('stream-event-', '')
         response = await fetch(`/api/stream-event/${eventId}`)
       } else {
-        response = await fetch(`/api/result/${jobId}`)
+        response = await fetch(`/api/result/${actualJobId}`)
       }
       
       if (!response.ok) {
@@ -83,7 +87,7 @@ const ResultsViewer = () => {
         description: error.message
       })
       // Navigate back to appropriate dashboard
-      if (jobId.startsWith('stream-event-')) {
+      if (actualJobId.startsWith('stream-event-') || actualJobId.startsWith('incident-')) {
         navigate('/live-streams')
       } else {
         navigate('/dashboard')
@@ -209,7 +213,7 @@ const ResultsViewer = () => {
 
   // Context-aware back navigation
   const getBackDestination = () => {
-    if (jobId.startsWith('stream-event-')) {
+    if (actualJobId.startsWith('stream-event-') || actualJobId.startsWith('incident-')) {
       return '/live-streams'
     } else {
       return '/dashboard'
@@ -217,7 +221,7 @@ const ResultsViewer = () => {
   }
 
   const getBackButtonText = () => {
-    if (jobId.startsWith('stream-event-')) {
+    if (actualJobId.startsWith('stream-event-') || actualJobId.startsWith('incident-')) {
       return 'Back to Live Streams'
     } else {
       return 'Back to Dashboard'
@@ -644,11 +648,19 @@ const ResultsViewer = () => {
                   )}
                 </>
               )}
+              {actualJobId.startsWith('incident-') && (
+                <Badge variant="outline" className="text-sm">
+                  Security Incident
+                </Badge>
+              )}
             </div>
             <p className="text-muted-foreground">
               Analyzed on {format(new Date(result.timestamp), 'PPpp')}
-              {jobId.startsWith('stream-event-') && result.stream_metadata && (
+              {(actualJobId.startsWith('stream-event-') || actualJobId.startsWith('incident-')) && result.stream_metadata && (
                 <span> • Stream: {result.stream_metadata.stream_name}</span>
+              )}
+              {actualJobId.startsWith('incident-') && result.incident_metadata && (
+                <span> • Incident: {result.incident_metadata.incident_id}</span>
               )}
             </p>
           </div>

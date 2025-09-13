@@ -52,6 +52,7 @@ function AppContent() {
           <Route path="/multi-analysis" element={<MultiVideoGridViewer />} />
           <Route path="/live-streams" element={<LiveStreamDashboard />} />
           <Route path="/stream-fullscreen/:streamId" element={<StreamFullScreen />} />
+          <Route path="/results/incident-:incidentId" element={<ResultsViewer />} />
         </Routes>
         
         <Toaster 

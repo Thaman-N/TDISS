@@ -26,5 +26,7 @@ CLAUDE.md
 *run/
 *_output/
 
+diagnostic_*.py
+
 # System files
 .DS_Store

@@ -96,8 +96,10 @@ const LiveStreamDashboard = () => {
   const [activeTab, setActiveTab] = useState('streams')
   const [streams, setStreams] = useState([])
   const [events, setEvents] = useState([])
+  const [incidents, setIncidents] = useState([]) // NEW
   const [loading, setLoading] = useState(true)
   const [eventsLoading, setEventsLoading] = useState(false)
+  const [incidentsLoading, setIncidentsLoading] = useState(false) // NEW
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [newStreamName, setNewStreamName] = useState('')
   const [newStreamUrl, setNewStreamUrl] = useState('')
@@ -110,7 +112,13 @@ const LiveStreamDashboard = () => {
     streamId: 'all',
     minConfidence: 0.7
   })
+  const [incidentFilter, setIncidentFilter] = useState({ // NEW
+    search: '',
+    dateRange: '24h',
+    streamId: 'all'
+  })
   const [expandedEvents, setExpandedEvents] = useState(new Set())
+  const [expandedIncidents, setExpandedIncidents] = useState(new Set()) // NEW
   const frameUpdateRefs = useRef({})
 
   const fetchStreams = useCallback(async () => {
@@ -199,14 +207,77 @@ const LiveStreamDashboard = () => {
     }
   }, [eventFilter])
 
+  // NEW: Fetch stitched incidents
+  const fetchStitchedIncidents = useCallback(async () => {
+    setIncidentsLoading(true)
+    try {
+      const params = new URLSearchParams()
+      
+      // Apply filters
+      if (incidentFilter.dateRange !== 'all') {
+        const now = new Date()
+        let startDate
+        switch (incidentFilter.dateRange) {
+          case '1h':
+            startDate = new Date(now.getTime() - 60 * 60 * 1000)
+            break
+          case '24h':
+            startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+            break
+          case '7d':
+            startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+            break
+          case '30d':
+            startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+            break
+          default:
+            startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+        }
+        params.append('start_date', startDate.toISOString())
+      }
+      
+      if (incidentFilter.streamId !== 'all') {
+        params.append('stream_id', incidentFilter.streamId)
+      }
+      
+      params.append('limit', '50')
+      
+      const response = await fetch(`/api/stitched-incidents?${params}`)
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      const data = await response.json()
+      
+      let filteredIncidents = data.incidents || []
+      
+      // Apply client-side search filter
+      if (incidentFilter.search) {
+        const searchLower = incidentFilter.search.toLowerCase()
+        filteredIncidents = filteredIncidents.filter(incident =>
+          incident.stream_name?.toLowerCase().includes(searchLower) ||
+          incident.incident_id?.toLowerCase().includes(searchLower)
+        )
+      }
+      
+      setIncidents(filteredIncidents)
+    } catch (error) {
+      console.error('Failed to fetch stitched incidents:', error)
+      toast.error('Failed to load incidents', {
+        description: error.message
+      })
+    } finally {
+      setIncidentsLoading(false)
+    }
+  }, [incidentFilter])
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true)
-      await Promise.all([fetchStreams(), fetchStreamEvents()])
+      await Promise.all([fetchStreams(), fetchStreamEvents(), fetchStitchedIncidents()])
       setLoading(false)
     }
     loadData()
-  }, [fetchStreams, fetchStreamEvents])
+  }, [fetchStreams, fetchStreamEvents, fetchStitchedIncidents])
 
   useEffect(() => {
     // Register for stream updates via WebSocket
@@ -220,6 +291,13 @@ const LiveStreamDashboard = () => {
       fetchStreamEvents()
     }
   }, [eventFilter, fetchStreamEvents, loading])
+
+  // NEW: Refresh incidents when filters change
+  useEffect(() => {
+    if (!loading && activeTab === 'incidents') {
+      fetchStitchedIncidents()
+    }
+  }, [incidentFilter, fetchStitchedIncidents, loading, activeTab])
 
   const handleStreamUpdate = useCallback((jobId, data) => {
     if (data.type === 'stream_frame' && data.stream_id) {
@@ -246,8 +324,7 @@ const LiveStreamDashboard = () => {
       }, 5000)
     }
     
-    // Fix: Only refresh events if user is NOT actively viewing events tab
-    // or if it's been more than 10 seconds since last refresh
+    // Handle violence detection (individual events)
     if (data.type === 'violence_detected') {
       const now = Date.now()
       const lastRefresh = localStorage.getItem('lastEventRefresh') || 0
@@ -257,18 +334,15 @@ const LiveStreamDashboard = () => {
         setTimeout(() => {
           fetchStreamEvents()
           localStorage.setItem('lastEventRefresh', now.toString())
-        }, 1000) // Small delay to avoid spam
+        }, 1000)
       }
       
-      // Determine button action based on incident status
       const isOngoingIncident = data.is_ongoing_incident || data.incident_status === 'active'
       const buttonLabel = isOngoingIncident ? 'View Stream' : 'View Event'
       const buttonAction = () => {
         if (isOngoingIncident) {
-          // Navigate to live stream fullscreen for ongoing incidents
           navigate(`/stream-fullscreen/${data.stream_id}`)
         } else {
-          // Switch to events tab for completed incidents
           setActiveTab('events')
           setTimeout(() => {
             fetchStreamEvents()
@@ -285,27 +359,27 @@ const LiveStreamDashboard = () => {
       })
     }
     
-    // Handle incident finalization notifications
+    // Handle incident finalization notifications - UPDATED
     if (data.type === 'incident_finalized') {
-      toast.success('Incident Analysis Complete', {
-        description: `${data.stream_name}: ${data.detection_count} detections, ${data.total_duration.toFixed(1)}s duration`,
+      toast.success('Security Incident Complete', {
+        description: `${data.stream_name}: ${data.detection_count} detections over ${data.total_duration.toFixed(1)}s`,
         action: {
           label: 'View Analysis',
           onClick: () => {
-            // Navigate to the first event in the incident for analysis
-            if (data.event_ids && data.event_ids.length > 0) {
-              navigate(`/results/stream-event-${data.event_ids[0]}`)
-            }
+            setActiveTab('incidents') // NEW: Switch to incidents tab
+            setTimeout(() => {
+              fetchStitchedIncidents()
+            }, 200)
           }
         }
       })
       
-      // Refresh events list
-      if (activeTab === 'events') {
-        fetchStreamEvents()
+      // Refresh incidents list if viewing
+      if (activeTab === 'incidents') {
+        fetchStitchedIncidents()
       }
     }
-  }, [fetchStreamEvents, activeTab])
+  }, [fetchStreamEvents, fetchStitchedIncidents, activeTab])
 
   const addStream = async () => {
     if (!newStreamName.trim() || !newStreamUrl.trim()) {
@@ -382,7 +456,6 @@ const LiveStreamDashboard = () => {
           return updated
         })
         
-        // Clear frame data
         setStreamFrames(prev => {
           const updated = { ...prev }
           delete updated[streamId]
@@ -427,7 +500,6 @@ const LiveStreamDashboard = () => {
     window.open(fullScreenUrl, '_blank', 'width=1280,height=720,scrollbars=no,resizable=yes')
   }
 
-  // Direct navigation to results - no more dialog
   const viewEventAnalysis = (event) => {
     navigate(`/results/stream-event-${event.id}`)
   }
@@ -451,6 +523,49 @@ const LiveStreamDashboard = () => {
       window.URL.revokeObjectURL(url)
       
       toast.success('Clip downloaded successfully')
+    } catch (error) {
+      toast.error('Failed to download clip', {
+        description: error.message
+      })
+    }
+  }
+
+  // NEW: Incident helper functions
+  const toggleIncidentExpansion = (incidentId) => {
+    setExpandedIncidents(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(incidentId)) {
+        newSet.delete(incidentId)
+      } else {
+        newSet.add(incidentId)
+      }
+      return newSet
+    })
+  }
+
+  const viewIncidentDetails = (incident) => {
+    navigate(`/results/incident-${incident.incident_id}`)
+  }
+
+  const downloadIncidentClip = async (incident) => {
+    if (!incident.stitched_clip_path) {
+      toast.error('No clip available for this incident')
+      return
+    }
+    
+    try {
+      const response = await fetch(incident.stitched_clip_path)
+      if (!response.ok) throw new Error('Failed to download clip')
+      
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `incident_${incident.incident_id}.mp4`
+      a.click()
+      window.URL.revokeObjectURL(url)
+      
+      toast.success('Incident clip downloaded successfully')
     } catch (error) {
       toast.error('Failed to download clip', {
         description: error.message
@@ -517,12 +632,17 @@ const LiveStreamDashboard = () => {
     })
   }
 
-  // Calculate stats
+  // Calculate stats - UPDATED to include incidents
   const totalEvents = events.length
   const last24hEvents = events.filter(event => {
     const eventTime = new Date(event.timestamp)
     const now = new Date()
     return (now - eventTime) < 24 * 60 * 60 * 1000
+  }).length
+  const last24hIncidents = incidents.filter(incident => {
+    const incidentTime = new Date(incident.start_timestamp)
+    const now = new Date()
+    return (now - incidentTime) < 24 * 60 * 60 * 1000
   }).length
   const avgConfidence = events.length > 0 
     ? events.reduce((sum, event) => sum + event.confidence, 0) / events.length 
@@ -592,7 +712,6 @@ const LiveStreamDashboard = () => {
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
           }
           
-          /* Shimmer effect for stop and fullscreen buttons */
           .shimmer-button {
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
@@ -810,7 +929,6 @@ const LiveStreamDashboard = () => {
             </div>
             
             <div className="flex items-center space-x-2 ml-4">
-              {/* Direct navigation to results - no dialog */}
               <Button
                 variant="default"
                 size="sm"
@@ -886,6 +1004,157 @@ const LiveStreamDashboard = () => {
                     Download Clip
                   </Button>
                 )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
+
+  // NEW: IncidentCard Component
+  const IncidentCard = ({ incident }) => {
+    const isExpanded = expandedIncidents.has(incident.id)
+    const stream = streams.find(s => s.id === incident.stream_id)
+    
+    return (
+      <Card className="incident-card cursor-pointer border-l-4 border-l-red-500">
+        <CardContent className="p-6">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <div className="flex items-center space-x-3 mb-3">
+                <Badge variant="destructive" className="text-xs">
+                  Security Incident
+                </Badge>
+                <Badge variant="outline" className="text-xs">
+                  {incident.detection_count} detections
+                </Badge>
+                <Badge variant="secondary" className="text-xs">
+                  {incident.total_duration.toFixed(1)}s duration
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {getRelativeTime(incident.start_timestamp)}
+                </span>
+              </div>
+              
+              <div className="flex items-center space-x-2 mb-3">
+                <Camera className="h-4 w-4 text-muted-foreground" />
+                <span className="font-medium">{incident.stream_name}</span>
+                <span className="text-sm text-muted-foreground">
+                  (ID: {incident.incident_id})
+                </span>
+              </div>
+              
+              <div className="flex items-center space-x-4 text-sm text-muted-foreground">
+                <span className="flex items-center">
+                  <Clock className="h-3 w-3 mr-1" />
+                  {formatDate(incident.start_timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+                <span className="flex items-center">
+                  <TrendingUp className="h-3 w-3 mr-1" />
+                  Avg: {(incident.avg_confidence * 100).toFixed(1)}%
+                </span>
+                <span className="flex items-center">
+                  <Activity className="h-3 w-3 mr-1" />
+                  Max: {(incident.max_confidence * 100).toFixed(1)}%
+                </span>
+              </div>
+            </div>
+            
+            <div className="flex items-center space-x-2 ml-4">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => viewIncidentDetails(incident)}
+              >
+                <Brain className="h-4 w-4 mr-1" />
+                Full Analysis
+              </Button>
+              
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => toggleIncidentExpansion(incident.id)}
+              >
+                {isExpanded ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+          </div>
+          
+          {isExpanded && (
+            <div className="mt-6 pt-6 border-t space-y-4">
+              <div className="grid grid-cols-3 gap-6 text-sm">
+                <div>
+                  <span className="text-muted-foreground">Stream ID:</span>
+                  <div className="font-medium">{incident.stream_id}</div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Detection Count:</span>
+                  <div className="font-medium">{incident.detection_count}</div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Individual Events:</span>
+                  <div className="font-medium">{incident.event_ids.length}</div>
+                </div>
+              </div>
+              
+              {incident.timeline_data && incident.timeline_data.length > 0 && (
+                <div>
+                  <h4 className="font-medium mb-2">Detection Timeline:</h4>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {incident.timeline_data.map((segment, index) => (
+                      <div key={index} className="flex justify-between text-xs bg-muted/50 p-2 rounded">
+                        <span>Detection {segment.detection_number}</span>
+                        <span>{segment.start.toFixed(1)}s - {segment.end.toFixed(1)}s</span>
+                        <span className={getConfidenceColor(segment.confidence)}>
+                          {(segment.confidence * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              <div className="flex justify-center space-x-2 pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => viewIncidentDetails(incident)}
+                >
+                  <Eye className="h-4 w-4 mr-2" />
+                  Detailed Analysis
+                </Button>
+                
+                {incident.stitched_clip_path && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => downloadIncidentClip(incident)}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Download Full Clip
+                  </Button>
+                )}
+                
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setActiveTab('events')
+                    setEventFilter(prev => ({ 
+                      ...prev, 
+                      streamId: incident.stream_id.toString(),
+                      search: incident.incident_id
+                    }))
+                  }}
+                >
+                  <History className="h-4 w-4 mr-2" />
+                  View Individual Events
+                </Button>
               </div>
             </div>
           )}
@@ -985,7 +1254,6 @@ const LiveStreamDashboard = () => {
           box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
         }
 
-        /* Stats Cards Effect from ProcessingDashboard */
         .stat-card {
           transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
           cursor: default;
@@ -1015,7 +1283,6 @@ const LiveStreamDashboard = () => {
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
-        /* Event Cards */
         .event-card {
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
@@ -1024,13 +1291,23 @@ const LiveStreamDashboard = () => {
           box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
           border-color: hsl(var(--primary) / 0.2);
         }
+
+        .incident-card {
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .incident-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+          border-color: hsl(var(--primary) / 0.2);
+        }
       `}</style>
+      
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-4xl font-bold mb-2">Live Stream Security</h1>
           <p className="text-muted-foreground">
-            Monitor multiple RTSP camera feeds with real-time violence detection and event playback
+            Monitor multiple RTSP camera feeds with real-time violence detection and comprehensive incident analysis
           </p>
         </div>
         
@@ -1080,8 +1357,8 @@ const LiveStreamDashboard = () => {
         </div>
       </div>
 
-      {/* Stats Dashboard */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      {/* Stats Dashboard - UPDATED */}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
         <Card className="stat-card">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center">
@@ -1105,6 +1382,19 @@ const LiveStreamDashboard = () => {
           <CardContent>
             <div className="text-2xl font-bold stat-value">{last24hEvents}</div>
             <div className="text-xs text-muted-foreground">of {totalEvents} total</div>
+          </CardContent>
+        </Card>
+        
+        <Card className="stat-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center">
+              <Brain className="h-4 w-4 mr-2" />
+              Incidents (24h)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold stat-value">{last24hIncidents}</div>
+            <div className="text-xs text-muted-foreground">of {incidents.length} total</div>
           </CardContent>
         </Card>
         
@@ -1147,15 +1437,15 @@ const LiveStreamDashboard = () => {
         </Card>
       </div>
 
-      {/* Main Content Tabs */}
+      {/* Main Content Tabs - UPDATED */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">        
         <div className="flex items-center justify-between">
           <TabsList>
             <TabsTrigger value="streams">Live Streams</TabsTrigger>
-            <TabsTrigger value="events" data-value="events">Security Events</TabsTrigger>
+            <TabsTrigger value="events">Individual Events</TabsTrigger>
+            <TabsTrigger value="incidents">Incident Analysis</TabsTrigger>
           </TabsList>
           
-          {/* Layout Controls for Grid View */}
           <div className="flex items-center space-x-2">
             <span className="text-sm text-muted-foreground mr-2">Layout:</span>
             {[
@@ -1333,9 +1623,9 @@ const LiveStreamDashboard = () => {
             <Card className="empty-state-card">
               <CardContent className="pt-6 text-center">
                 <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-lg font-medium mb-2">No security events found</p>
+                <p className="text-lg font-medium mb-2">No individual events found</p>
                 <p className="text-muted-foreground">
-                  Violence detection events will appear here when detected
+                  Individual violence detection events will appear here in real-time
                 </p>
               </CardContent>
             </Card>
@@ -1359,6 +1649,140 @@ const LiveStreamDashboard = () => {
               <div className="space-y-4">
                 {events.map(event => (
                   <EventCard key={event.id} event={event} />
+                ))}
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* NEW: Incidents Tab */}
+        <TabsContent value="incidents" className="space-y-6">
+          {/* Incident Filters */}
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center">
+                <Filter className="h-5 w-5 mr-2" />
+                Incident Filters
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="space-y-2">
+                  <Label htmlFor="incident-search">Search</Label>
+                  <Input
+                    id="incident-search"
+                    placeholder="Search incidents..."
+                    value={incidentFilter.search}
+                    onChange={(e) => setIncidentFilter(prev => ({ ...prev, search: e.target.value }))}
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="incident-dateRange">Time Range</Label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        className="w-full justify-between"
+                      >
+                        {incidentFilter.dateRange === '1h' ? 'Last Hour' : 
+                         incidentFilter.dateRange === '24h' ? 'Last 24 Hours' : 
+                         incidentFilter.dateRange === '7d' ? 'Last 7 Days' : 
+                         incidentFilter.dateRange === '30d' ? 'Last 30 Days' : 'All Time'}
+                        <ChevronDown className="h-4 w-4 ml-2 opacity-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center" className="bg-background/99 backdrop-blur supports-[backdrop-filter]:bg-background/99 w-full">
+                      <DropdownMenuItem onClick={() => setIncidentFilter(prev => ({ ...prev, dateRange: '1h' }))}>
+                        Last Hour
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setIncidentFilter(prev => ({ ...prev, dateRange: '24h' }))}>
+                        Last 24 Hours
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setIncidentFilter(prev => ({ ...prev, dateRange: '7d' }))}>
+                        Last 7 Days
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setIncidentFilter(prev => ({ ...prev, dateRange: '30d' }))}>
+                        Last 30 Days
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setIncidentFilter(prev => ({ ...prev, dateRange: 'all' }))}>
+                        All Time
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="incident-streamFilter">Stream</Label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        className="w-full justify-between"
+                      >
+                        {incidentFilter.streamId === 'all' 
+                          ? 'All Streams' 
+                          : streams.find(s => s.id.toString() === incidentFilter.streamId)?.name || 'Select Stream'}
+                        <ChevronDown className="h-4 w-4 ml-2 opacity-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center" className="bg-background/99 backdrop-blur supports-[backdrop-filter]:bg-background/99 w-full">
+                      <DropdownMenuItem onClick={() => setIncidentFilter(prev => ({ ...prev, streamId: 'all' }))}>
+                        All Streams
+                      </DropdownMenuItem>
+                      {streams.map(stream => (
+                        <DropdownMenuItem 
+                          key={stream.id} 
+                          onClick={() => setIncidentFilter(prev => ({ ...prev, streamId: stream.id.toString() }))}
+                        >
+                          {stream.name}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Incidents List */}
+          {incidentsLoading ? (
+            <Card className="empty-state-card">
+              <CardContent className="pt-6 text-center">
+                <Brain className="h-8 w-8 animate-pulse mx-auto mb-4" />
+                <p>Loading incidents...</p>
+              </CardContent>
+            </Card>
+          ) : incidents.length === 0 ? (
+            <Card className="empty-state-card">
+              <CardContent className="pt-6 text-center">
+                <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-lg font-medium mb-2">No security incidents found</p>
+                <p className="text-muted-foreground">
+                  Comprehensive incident analyses will appear here when detected
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-medium">
+                  {incidents.length} incident{incidents.length !== 1 ? 's' : ''} found
+                </h3>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={fetchStitchedIncidents}
+                  disabled={incidentsLoading}
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Refresh
+                </Button>
+              </div>
+              
+              <div className="space-y-4">
+                {incidents.map(incident => (
+                  <IncidentCard key={incident.id} incident={incident} />
                 ))}
               </div>
             </div>
