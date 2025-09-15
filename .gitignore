@@ -25,7 +25,8 @@ tp*/
 CLAUDE.md
 *run/
 *_output/
-
+ignore_*.*
+*_ignore/
 diagnostic_*.py
 
 # System files

@@ -5,8 +5,10 @@ import torch
 from torch.utils.data import Dataset
 import random
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 import warnings
+import pickle
+import hashlib
 warnings.filterwarnings('ignore')
 
 # Import YOLO for CUE-Net spatial cropping
@@ -20,11 +22,12 @@ except ImportError:
 
 class CUENetStyleDataset(Dataset):
     """
-    EXACT CUE-Net methodology dataset:
+    EXACT CUE-Net methodology dataset with YOLO detection caching:
     - RandAugment ONLY (no complex augmentation)
     - YOLO V8 video-level spatial cropping with maximum bounding box
     - 336×336 resolution (CUE-Net setting)
     - Consistent cropping across entire video
+    - CACHED YOLO detection results for speed
     """
     
     def __init__(
@@ -44,9 +47,12 @@ class CUENetStyleDataset(Dataset):
         use_randaugment: bool = True,
         randaugment_n: int = 2,  # Number of augmentation operations
         randaugment_m: int = 10,  # Magnitude of augmentations
+        # YOLO caching settings
+        cache_yolo_detections: bool = True,
+        cache_dir: Optional[str] = None,
     ):
         """
-        CUE-Net style dataset with their EXACT methodology
+        CUE-Net style dataset with their EXACT methodology + YOLO caching
         """
         self.dataset_path = Path(dataset_path)
         self.split = split
@@ -60,11 +66,27 @@ class CUENetStyleDataset(Dataset):
         self.use_cuenet_cropping = use_cuenet_cropping and YOLO_AVAILABLE and split == "train"
         self.yolo_model_size = yolo_model_size
         
+        # YOLO detection caching
+        self.cache_yolo_detections = cache_yolo_detections
+        self.yolo_cache: Dict[str, list] = {}  # In-memory cache
+        
+        # Setup cache directory
+        if cache_dir is None:
+            cache_dir = self.dataset_path / "yolo_cache"
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_file = self.cache_dir / f"yolo_detections_{yolo_model_size}_{split}.pkl"
+        
         # Load YOLO model for person detection (CUE-Net methodology)
         if self.use_cuenet_cropping:
             try:
                 self.yolo_model = YOLO(f'{yolo_model_size}.pt')
                 print(f"✅ Loaded YOLO {yolo_model_size} for CUE-Net spatial cropping")
+                
+                # Load existing cache
+                if self.cache_yolo_detections:
+                    self._load_yolo_cache()
+                    
             except Exception as e:
                 print(f"⚠️  Failed to load YOLO: {e}")
                 self.use_cuenet_cropping = False
@@ -88,8 +110,43 @@ class CUENetStyleDataset(Dataset):
             print("CUE-Net methodology enabled:")
             print(f"  🎯 CUE-Net spatial cropping: {self.use_cuenet_cropping}")
             print(f"  🎨 RandAugment only: {self.use_randaugment} (N={randaugment_n}, M={randaugment_m})")
-            print(f"  📐 Resolution: {spatial_size}×{spatial_size} (CUE-Net: 336×336)")
+            print(f"  📏 Resolution: {spatial_size}×{spatial_size} (CUE-Net: 336×336)")
             print(f"  🚫 NO complex augmentations (following CUE-Net paper)")
+            
+            if self.cache_yolo_detections:
+                print(f"  💾 YOLO detection caching: enabled")
+                print(f"  📁 Cache directory: {self.cache_dir}")
+                print(f"  🗃️  Cached detections: {len(self.yolo_cache)}")
+    
+    def _get_video_hash(self, video_path: Path) -> str:
+        """Generate a hash for video file to ensure cache validity"""
+        # Use file path + size + modification time for hash
+        stat = video_path.stat()
+        hash_input = f"{video_path}_{stat.st_size}_{stat.st_mtime}"
+        return hashlib.md5(hash_input.encode()).hexdigest()
+    
+    def _load_yolo_cache(self):
+        """Load YOLO detection cache from disk"""
+        try:
+            if self.cache_file.exists():
+                with open(self.cache_file, 'rb') as f:
+                    self.yolo_cache = pickle.load(f)
+                print(f"📁 Loaded YOLO cache with {len(self.yolo_cache)} entries")
+            else:
+                self.yolo_cache = {}
+                print("📁 No existing YOLO cache found, starting fresh")
+        except Exception as e:
+            print(f"⚠️  Failed to load YOLO cache: {e}")
+            self.yolo_cache = {}
+    
+    def _save_yolo_cache(self):
+        """Save YOLO detection cache to disk"""
+        try:
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(self.yolo_cache, f)
+            print(f"💾 Saved YOLO cache with {len(self.yolo_cache)} entries")
+        except Exception as e:
+            print(f"⚠️  Failed to save YOLO cache: {e}")
     
     def _load_dataset(self, max_videos_per_class: Optional[int]) -> Tuple[list, list]:
         """Load video paths and labels"""
@@ -123,76 +180,112 @@ class CUENetStyleDataset(Dataset):
         
         return list(video_paths), list(labels)
     
-    def _cuenet_spatial_cropping(self, frames: np.ndarray) -> np.ndarray:
+    def _get_cached_detections(self, video_path: Path) -> Optional[list]:
+        """Get cached YOLO detections for a video"""
+        if not self.cache_yolo_detections:
+            return None
+        
+        video_hash = self._get_video_hash(video_path)
+        cache_key = f"{video_path.name}_{video_hash}"
+        
+        return self.yolo_cache.get(cache_key, None)
+    
+    def _cache_detections(self, video_path: Path, detections: list):
+        """Cache YOLO detections for a video"""
+        if not self.cache_yolo_detections:
+            return
+        
+        video_hash = self._get_video_hash(video_path)
+        cache_key = f"{video_path.name}_{video_hash}"
+        
+        self.yolo_cache[cache_key] = detections
+    
+    def _cuenet_spatial_cropping(self, frames: np.ndarray, video_path: Path) -> np.ndarray:
         """
-        EXACT CUE-Net spatial cropping methodology:
-        - Detect people in ALL frames using YOLO V8
+        EXACT CUE-Net spatial cropping methodology with YOLO caching:
+        - Check cache first for existing detections
+        - Detect people in ALL frames using YOLO V8 (if not cached)
         - Calculate MAXIMUM bounding box across ENTIRE video
         - Apply SAME crop to all frames (consistent spatial attention)
+        - Cache results for future epochs
         """
         if not self.use_cuenet_cropping:
             return frames
         
         T, H, W, C = frames.shape
-        all_detections = []
         
-        try:
-            # CUE-Net: Process every frame to find people
-            for frame in frames:
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                
-                # YOLO V8 detection
-                results = self.yolo_model(
-                    frame_bgr, 
-                    verbose=False, 
-                    conf=0.5,  # Person detection confidence
-                    classes=[0]  # Only detect persons (class 0)
-                )
-                
-                # Extract person bounding boxes
-                for result in results:
-                    if result.boxes is not None:
-                        boxes = result.boxes.xyxy.cpu().numpy()
-                        classes = result.boxes.cls.cpu().numpy()
-                        confidences = result.boxes.conf.cpu().numpy()
-                        
-                        # Filter for persons only
-                        person_mask = (classes == 0) & (confidences > 0.5)
-                        person_boxes = boxes[person_mask]
-                        
-                        if len(person_boxes) > 0:
-                            all_detections.extend(person_boxes)
+        # Check cache first
+        cached_detections = self._get_cached_detections(video_path)
+        
+        if cached_detections is not None:
+            # Use cached detections
+            all_detections = cached_detections
+            # print(f"🗃️  Using cached YOLO detections for {video_path.name}")
+        else:
+            # Run YOLO detection and cache results
+            all_detections = []
             
-            # CUE-Net: Calculate maximum bounding box across entire video
-            if len(all_detections) > 0:
-                all_detections = np.array(all_detections)
-                
-                # Find maximum bounding box that encompasses all people
-                x_min = int(max(0, np.min(all_detections[:, 0])))
-                y_min = int(max(0, np.min(all_detections[:, 1])))
-                x_max = int(min(W, np.max(all_detections[:, 2])))
-                y_max = int(min(H, np.max(all_detections[:, 3])))
-                
-                crop_w = x_max - x_min
-                crop_h = y_max - y_min
-                
-                # Apply consistent crop to ALL frames
-                if crop_w > 0 and crop_h > 0:
-                    cropped_frames = []
-                    for frame in frames:
-                        cropped_frame = frame[y_min:y_max, x_min:x_max]
-                        resized_frame = cv2.resize(cropped_frame, (W, H))
-                        cropped_frames.append(resized_frame)
+            try:
+                # CUE-Net: Process every frame to find people
+                for frame in frames:
+                    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                     
-                    # print(f"✅ CUE-Net crop applied: ({x_min},{y_min})-({x_max},{y_max})")
-                    return np.array(cropped_frames)
+                    # YOLO V8 detection
+                    results = self.yolo_model(
+                        frame_bgr, 
+                        verbose=False, 
+                        conf=0.5,  # Person detection confidence
+                        classes=[0]  # Only detect persons (class 0)
+                    )
+                    
+                    # Extract person bounding boxes
+                    for result in results:
+                        if result.boxes is not None:
+                            boxes = result.boxes.xyxy.cpu().numpy()
+                            classes = result.boxes.cls.cpu().numpy()
+                            confidences = result.boxes.conf.cpu().numpy()
+                            
+                            # Filter for persons only
+                            person_mask = (classes == 0) & (confidences > 0.5)
+                            person_boxes = boxes[person_mask]
+                            
+                            if len(person_boxes) > 0:
+                                all_detections.extend(person_boxes.tolist())
+                
+                # Cache the detection results
+                self._cache_detections(video_path, all_detections)
+                # print(f"💾 Cached YOLO detections for {video_path.name}")
+                
+            except Exception as e:
+                print(f"⚠️ YOLO detection failed for {video_path.name}: {e}")
+                return frames
+        
+        # CUE-Net: Calculate maximum bounding box across entire video
+        if len(all_detections) > 0:
+            all_detections = np.array(all_detections)
             
-            # If no people detected, return original frames
-            return frames
+            # Find maximum bounding box that encompasses all people
+            x_min = int(max(0, np.min(all_detections[:, 0])))
+            y_min = int(max(0, np.min(all_detections[:, 1])))
+            x_max = int(min(W, np.max(all_detections[:, 2])))
+            y_max = int(min(H, np.max(all_detections[:, 3])))
             
-        except Exception as e:
-            print(f"⚠️ CUE-Net cropping failed: {e}")
-            return frames
+            crop_w = x_max - x_min
+            crop_h = y_max - y_min
+            
+            # Apply consistent crop to ALL frames
+            if crop_w > 0 and crop_h > 0:
+                cropped_frames = []
+                for frame in frames:
+                    cropped_frame = frame[y_min:y_max, x_min:x_max]
+                    resized_frame = cv2.resize(cropped_frame, (W, H))
+                    cropped_frames.append(resized_frame)
+                
+                # print(f"✅ CUE-Net crop applied: ({x_min},{y_min})-({x_max},{y_max})")
+                return np.array(cropped_frames)
+        
+        # If no people detected, return original frames
+        return frames
     
     def _extract_frames(self, video_path: Path) -> np.ndarray:
         """Extract frames with simple uniform sampling"""
@@ -245,8 +338,8 @@ class CUENetStyleDataset(Dataset):
             
             frames_array = np.array(sampled_frames[:self.clip_len])  # [T, H, W, C]
             
-            # Apply CUE-Net spatial cropping
-            frames_array = self._cuenet_spatial_cropping(frames_array)
+            # Apply CUE-Net spatial cropping with caching
+            frames_array = self._cuenet_spatial_cropping(frames_array, video_path)
             
             return frames_array
             
@@ -364,13 +457,13 @@ class CUENetStyleDataset(Dataset):
         return len(self.video_paths)
     
     def __getitem__(self, idx):
-        """Get video clip with CUE-Net methodology"""
+        """Get video clip with CUE-Net methodology and YOLO caching"""
         for attempt in range(self.num_retries):
             try:
                 video_path = self.video_paths[idx]
                 label = self.labels[idx]
                 
-                # Extract frames with CUE-Net spatial cropping
+                # Extract frames with CUE-Net spatial cropping (now cached)
                 frames = self._extract_frames(video_path)
                 
                 # Apply RandAugment (CUE-Net approach)
@@ -413,6 +506,12 @@ class CUENetStyleDataset(Dataset):
             dummy_output['flow'] = dummy_flow
             
         return dummy_output, 0
+    
+    def __del__(self):
+        """Save cache when dataset is destroyed"""
+        if hasattr(self, 'cache_yolo_detections') and self.cache_yolo_detections:
+            if hasattr(self, 'yolo_cache') and len(self.yolo_cache) > 0:
+                self._save_yolo_cache()
 
 
 def create_cuenet_dataloaders(
@@ -421,11 +520,12 @@ def create_cuenet_dataloaders(
     num_workers: int = 4,
     clip_len: int = 16,
     spatial_size: int = 336,  # CUE-Net uses 336×336
-    max_videos_per_class: Optional[int] = None
+    max_videos_per_class: Optional[int] = None,
+    cache_yolo_detections: bool = True  # Enable caching by default
 ):
-    """Create dataloaders with CUE-Net methodology"""
+    """Create dataloaders with CUE-Net methodology and YOLO caching"""
     
-    # Create datasets with CUE-Net methodology
+    # Create datasets with CUE-Net methodology and caching
     train_dataset = CUENetStyleDataset(
         dataset_path=dataset_path,
         split="train",
@@ -438,7 +538,9 @@ def create_cuenet_dataloaders(
         yolo_model_size="yolov8n",
         use_randaugment=True,
         randaugment_n=2,
-        randaugment_m=10
+        randaugment_m=10,
+        # YOLO caching
+        cache_yolo_detections=cache_yolo_detections
     )
     
     val_dataset = CUENetStyleDataset(
@@ -450,7 +552,9 @@ def create_cuenet_dataloaders(
         max_videos_per_class=max_videos_per_class,
         # No augmentation for validation
         use_cuenet_cropping=False,
-        use_randaugment=False
+        use_randaugment=False,
+        # No caching needed for validation (no cropping)
+        cache_yolo_detections=False
     )
     
     # Create dataloaders
@@ -472,12 +576,13 @@ def create_cuenet_dataloaders(
     )
     
     print("\n" + "="*60)
-    print("🎯 CUE-NET EXACT METHODOLOGY")
+    print("🎯 CUE-NET EXACT METHODOLOGY + YOLO CACHING")
     print("="*60)
     print("✅ YOLO V8 video-level spatial cropping")
     print("✅ RandAugment ONLY (N=2, M=10)")
     print("✅ 336×336 resolution (CUE-Net paper setting)")
     print("✅ Consistent spatial attention across video")
+    print("✅ YOLO detection caching for speed")
     print("🚫 NO complex augmentations")
     print("🚫 NO ROI crops, motion flips, keyframe focus")
     print("="*60)
@@ -486,20 +591,21 @@ def create_cuenet_dataloaders(
 
 
 if __name__ == "__main__":
-    # Test the CUE-Net dataset
+    # Test the CUE-Net dataset with caching
     dataset_path = r"D:\Thaman\archive\RWF-2000"
     
-    print("Testing CUE-Net style dataset...")
+    print("Testing CUE-Net style dataset with YOLO caching...")
     
     train_loader, val_loader, train_dataset, val_dataset = create_cuenet_dataloaders(
         dataset_path=dataset_path,
         batch_size=2,
         num_workers=0,
         max_videos_per_class=5,
-        spatial_size=336  # CUE-Net resolution
+        spatial_size=336,  # CUE-Net resolution
+        cache_yolo_detections=True
     )
     
-    print("\nTesting CUE-Net dataset loading...")
+    print("\nTesting CUE-Net dataset loading with caching...")
     for i, (data, labels) in enumerate(train_loader):
         print(f"Batch {i+1}:")
         print(f"  RGB shape: {data['rgb'].shape}")
@@ -509,4 +615,4 @@ if __name__ == "__main__":
         if i >= 1:
             break
     
-    print("\nCUE-Net dataset test completed!")
+    print("\nCUE-Net dataset test with caching completed!")

@@ -13,6 +13,7 @@ import { WebSocketProvider } from './contexts/WebSocketContext'
 import LiveStreamDashboard from './components/LiveStreamDashboard'
 import StreamFullScreen from './components/StreamFullScreen'
 import MultiVideoGridViewer from './components/MultiVideoGridViewer'
+import MasterDashboard from './components/MasterDashboard'
 
 function AppContent() {
   const location = useLocation()
@@ -46,6 +47,7 @@ function AppContent() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/upload" element={<UploadInterface />} />
           <Route path="/dashboard" element={<ProcessingDashboard />} />
+          <Route path="/master-dashboard" element={<MasterDashboard />} />
           <Route path="/results/:jobId" element={<ResultsViewer />} />
           {/* NEW: Add this line for stream events */}
           <Route path="/results/stream-event-:eventId" element={<ResultsViewer />} />
