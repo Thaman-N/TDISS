@@ -26,7 +26,6 @@
   - [Quick Start](#quick-start)
   - [Training Pipeline](#training-pipeline)
   - [Running Tests](#running-tests)
-  - [Zero-shot Classification on RLVS (if trained on RWF2000)](#zero-shot-classification-on-rlvs-if-trained-on-rwf2000)
   - [Project Structure](#project-structure)
   - [Requirements](#requirements)
   - [License](#license)
@@ -41,9 +40,11 @@ A web-based dashboard for analyzing videos and detecting aggression using deep l
 
 ## Features
 
-* **Real-time Processing**: Add RTSP live streams or upload videos.
-* **Live Job Tracking**: Monitor progress with real-time updates.
-* **Detailed Results**: Violence timeline, confidence scores, metadata.
+* **Real-time Processing**: Seamlessly process live RTSP streams or uploaded video files.
+* **Live Tracking Dashboards**: Monitor live streams or job progress while it happens.
+* **Instant Alerts**: Receive real-time notifications on the UI and Discord, complete with video playbacks and evidence thumbnails.
+* **Comprehensive Analytic**: Review & download detailed timelines, confidence scores, and rich metadata for every incident.
+* **Event Stitching**: Automatic stitching of sequential detections into single, manageable incidents for clearer reporting.
 * **Search & Filter**: History browsing with search and filtering.
 * **Modern UI**: Responsive TailwindCSS-based design.
 
@@ -51,7 +52,7 @@ A web-based dashboard for analyzing videos and detecting aggression using deep l
 
 ## Benchmark
 
-- RWF 2000 - 92.5% Validation Accuracy (94% Current SOTA)
+- RWF 2000 - 94.25% Validation Accuracy (New SOTA benchmark)
 - RLVS - 99.5% Validation Accuracy (SOTA Performance)
 - Hockey Fight Videos - 100% Validation Accuracy (SOTA Performance)
 - Cross Dataset Validation accuracy varies from 80-90%
@@ -83,7 +84,7 @@ pip install -r requirements.txt
 pip install -c constraints.txt torch torchvision torchaudio #cpu build
 pip install -c constraints.txt torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 #cuda build
 
-#if you run into slowapi or fvcore import errors, run - pip install slowapi fvcore
+# If you run into slowapi or fvcore import errors, run - pip install slowapi fvcore
 
 # Frontend setup
 cd frontend
@@ -93,7 +94,7 @@ npm install
 3. **Add your PyTorch model**
 
 ```bash
-#ignore if you want to use the one in the repo
+# Ignore if you want to use the one in the repo
 cp /path/to/your/model.pth .
 ```
 
@@ -104,20 +105,59 @@ cd backend
 python main.py
 ```
 
-5. **Run the frontend server**
+5. **Setup Discord webhook(optional, only if you want notifications pushed)**
+
+   * Step 1: Create Discord Server
+
+     - Open Discord (web, desktop, or mobile)
+     - Click the "+" button on the left sidebar
+     - Choose "Create My Own" → "For me and my friends"
+     - Name it something like "Security Alerts" or whatever you like
+     - Click "Create"
+
+   * Step 2: Create a Channel for Alerts
+
+     - In your new server, right-click the text channels area
+     - Click "Create Channel"
+     - Name it "stream-alerts" or whatever you like
+     - Make sure it's a Text Channel
+     - Click "Create Channel"
+
+   * Step 3: Set Up Webhook
+
+     - Right-click on your new channel
+     - Click "Edit Channel"
+     - Go to "Integrations" tab on the left
+     - Click "Webhooks"
+     - Click "New Webhook"
+     - Name it "EzurNet Bot" or whatever name you prefer
+     - Copy the "Webhook URL" - this is what you'll need to add in main.py
+     - Save Changes
+
+   ```bash
+   #check if the webhook works
+   curl -X POST "YOUR_WEBHOOK_URL_HERE" \
+     -H "Content-Type: application/json" \
+     -d '{"content": "Test message from violence detection system"}'
+   ```
+
+   * Step 4: Change webhook URL in main.py
+
+6. **Run the frontend server**
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-6. **Open in browser** → [http://localhost:5173](http://localhost:5173)
+7. **Open in browser** → [http://localhost:5173](http://localhost:5173)
 
 ---
 
 ## Training Pipeline
 
 ```bash
+# Older GPU architectures (pre-blackwell) may not allow you to use num_workers argument in which case set it to 0 when running the command
 cd backend/trainingpipeline
 # RWF 2000
 python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
@@ -136,8 +176,9 @@ python train_x3d_violence.py --dataset_path "C:\archive\HockeyFightSplit" --batc
 
 ## Running Tests
 
-**Testing Model Performance on Val split**
+**Testing Model Performance on Val split of a dataset**
 ```bash
+# This can be used to get measure variance of a model on a dataset's val split or to test cross dataset accuracy
 cd backend/trainingpipeline
 python testval.py --dataset "path/to/dataset" --model "path/to/model.pth" --runs 5 --output "my_custom_output_folder"
 ```
@@ -163,24 +204,16 @@ npm run test:coverage       # With coverage
 
 ---
 
-## Zero-shot Classification on RLVS (if trained on RWF2000)
-
-```bash
-python evaluate_rlvs.py "your/dataset/path"
-```
-
----
-
 ## Project Structure
 
 ```
 backend
-├── evaluate_rlvs.py
+├── hockey100.pth
 ├── main.py
 ├── model.py
 ├── torch_detection.py
-├── rlvs9875.pth
-├── rwf9250.pth
+├── rlvs9950.pth
+├── rwf9425.pth
 ├── trainingpipeline
 │   ├── split_rlvs.py
 │   ├── testval.py
@@ -228,17 +261,23 @@ frontend
 │   │   └── ui
 │   │       ├── alert.jsx
 │   │       ├── badge.jsx
+│   │       ├── breadcrumb.jsx
 │   │       ├── button.jsx
 │   │       ├── card.jsx
+│   │       ├── chart.jsx
 │   │       ├── dialog.jsx
 │   │       ├── dropdown-menu.jsx
 │   │       ├── input.jsx
 │   │       ├── label.jsx
 │   │       ├── navigation-menu.jsx
 │   │       ├── progress.jsx
+│   │       ├── separator.jsx
+│   │       ├── sheet.jsx
+│   │       ├── skeleton.jsx
 │   │       ├── sonner.jsx
 │   │       ├── table.jsx
-│   │       └── tabs.jsx
+│   │       ├── tabs.jsx
+│   │       └── tooltip.jsx
 │   ├── contexts
 │   │   └── WebSocketContext.jsx
 │   ├── hooks
@@ -282,7 +321,7 @@ frontend
 * PyTorch
 * OpenCV
 * FastAPI
-* GPU recommended for inference
+* GPU recommended (if you do not intend to use gpu, training pipeline might need to be modified a bit but inference pipeline will work regardless)
 
 ---
 
