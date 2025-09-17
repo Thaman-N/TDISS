@@ -255,6 +255,8 @@ class CUENetStyleDataset(Dataset):
                 # Cache the detection results
                 self._cache_detections(video_path, all_detections)
                 # print(f"💾 Cached YOLO detections for {video_path.name}")
+                if len(self.yolo_cache) % 50 == 0:
+                    self._save_yolo_cache()
                 
             except Exception as e:
                 print(f"⚠️ YOLO detection failed for {video_path.name}: {e}")
@@ -313,14 +315,20 @@ class CUENetStyleDataset(Dataset):
             if len(all_frames) == 0:
                 raise ValueError(f"No frames extracted from video: {video_path}")
             
-            # Simple uniform sampling (like CUE-Net)
+            # Adaptive sampling to maximize video coverage
             total_extracted = len(all_frames)
-            required_frames = self.clip_len * self.sampling_rate
-            
-            if total_extracted >= required_frames:
-                max_start = total_extracted - required_frames
-                start_idx = random.randint(0, max_start) if max_start > 0 else 0
-                frame_indices = list(range(start_idx, start_idx + required_frames, self.sampling_rate))
+
+            # Calculate adaptive sampling rate based on video length
+            if total_extracted >= self.clip_len:
+                adaptive_sampling_rate = max(1, total_extracted // self.clip_len)
+                required_frames = self.clip_len * adaptive_sampling_rate
+                
+                if total_extracted >= required_frames:
+                    max_start = total_extracted - required_frames
+                    start_idx = random.randint(0, max_start) if max_start > 0 else 0
+                    frame_indices = list(range(start_idx, start_idx + required_frames, adaptive_sampling_rate))
+                else:
+                    frame_indices = np.linspace(0, total_extracted - 1, self.clip_len).astype(int).tolist()
             else:
                 frame_indices = np.linspace(0, total_extracted - 1, self.clip_len).astype(int).tolist()
             
