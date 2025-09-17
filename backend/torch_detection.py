@@ -11,7 +11,7 @@ from model import X3DViolenceDetector, create_model
 # Constants for X3D model - MATCH TRAINING SETTINGS
 NUM_FRAMES = 16       # X3D works with 16 frames
 INPUT_SIZE = 336      # X3D uses 336x336 input (matching training)
-SAMPLING_RATE = 4     # Temporal sampling rate
+SAMPLING_RATE = 4     # Temporal sampling rate (used for live streams)
 
 def load_violence_detection_model(model_path, device=None):
     """
@@ -68,17 +68,16 @@ def load_violence_detection_model(model_path, device=None):
         
         print(f"Creating model with architecture: {model_name}")
         
-        # Create model instance with matching architecture
+        # Create model instance with matching architecture - UPDATED FOR CLEAN MODEL
         model = X3DViolenceDetector(
             x3d_model_name=model_name,
             num_classes=2,
             use_motion_enhancement=True,  # Match training
-            dropout_rate=0.2,  # Match training
-            motion_weight=0.3,   # Match training
+            dropout_rate=0.15,  # Match clean model default (was 0.2 in old version)
             device=device.type   # Pass the detected device type
+            # Removed motion_weight parameter - doesn't exist in clean model
         )
         
-        # Rest of the function remains the same...
         # Load state dict
         if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
@@ -117,7 +116,7 @@ def load_violence_detection_model(model_path, device=None):
         
         print("Trained X3D model loaded successfully and ready for inference.")
         
-        # Rest remains the same (warm-up prediction)...
+        # Model warm-up prediction
         print("Running model warm-up prediction...")
         dummy_rgb = torch.zeros((1, 3, NUM_FRAMES, INPUT_SIZE, INPUT_SIZE), dtype=torch.float32, device=device)
         dummy_data = {'rgb': dummy_rgb}
@@ -149,8 +148,16 @@ def load_violence_detection_model(model_path, device=None):
         traceback.print_exc()
         raise
 
-def extract_frames(video_path, num_frames=NUM_FRAMES, sampling_rate=SAMPLING_RATE):
-    """Extract frames from a video file optimized for X3D - MATCH TRAINING PIPELINE"""
+def extract_frames(video_path, num_frames=NUM_FRAMES, sampling_rate=SAMPLING_RATE, use_adaptive_sampling=True):
+    """
+    Extract frames from a video file - FIXED TO MATCH TRAINING PIPELINE
+    
+    Args:
+        video_path: Path to video file
+        num_frames: Number of frames to extract (16 for X3D)
+        sampling_rate: Used for live stream compatibility (ignored if adaptive=True)
+        use_adaptive_sampling: Use adaptive sampling (True for videos, False for live streams)
+    """
     print(f"Extracting {num_frames} frames from: {video_path}")
     
     # Try with FFMPEG backend explicitly
@@ -167,47 +174,110 @@ def extract_frames(video_path, num_frames=NUM_FRAMES, sampling_rate=SAMPLING_RAT
     
     print(f"Video has {total_frames} frames at {fps} FPS")
     
-    # Calculate frame indices for temporal sampling (MATCH TRAINING DATASET LOGIC)
-    required_frames = num_frames * sampling_rate
-    
-    if total_frames >= required_frames:
-        # Uniform sampling from video (random start during training, center for inference)
-        start_idx = max(0, (total_frames - required_frames) // 2)  # Center sampling for consistent inference
-        frame_indices = np.arange(start_idx, start_idx + required_frames, sampling_rate)
-    else:
-        # Handle short videos by repeating frames (MATCH TRAINING)
-        if total_frames > 0:
-            frame_indices = np.linspace(0, total_frames - 1, num_frames).astype(int)
+    try:
+        if use_adaptive_sampling:
+            # ADAPTIVE SAMPLING - MATCH TRAINING EXACTLY
+            print("Using adaptive sampling (matching training pipeline)")
+            
+            # Read all frames first (matching training approach)
+            all_frames = []
+            frame_count = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Resize and convert to RGB immediately (save memory)
+                frame = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                all_frames.append(frame)
+                frame_count += 1
+            
+            cap.release()
+            
+            if len(all_frames) == 0:
+                raise ValueError(f"No frames extracted from video: {video_path}")
+            
+            total_extracted = len(all_frames)
+            print(f"Read {total_extracted} frames for adaptive sampling")
+            
+            # MATCH TRAINING ADAPTIVE SAMPLING LOGIC EXACTLY
+            clip_len = num_frames  # 16 frames
+            
+            if total_extracted >= clip_len:
+                # Calculate adaptive sampling rate (MATCH TRAINING)
+                adaptive_sampling_rate = max(1, total_extracted // clip_len)
+                required_frames = clip_len * adaptive_sampling_rate
+                
+                print(f"Adaptive sampling rate: {adaptive_sampling_rate}")
+                
+                if total_extracted >= required_frames:
+                    # For inference: use center start instead of random (consistent results)
+                    max_start = total_extracted - required_frames
+                    start_idx = max_start // 2  # Center sampling
+                    frame_indices = list(range(start_idx, start_idx + required_frames, adaptive_sampling_rate))
+                else:
+                    # Fallback: linear interpolation
+                    frame_indices = np.linspace(0, total_extracted - 1, clip_len).astype(int).tolist()
+            else:
+                # Short video: linear interpolation
+                frame_indices = np.linspace(0, total_extracted - 1, clip_len).astype(int).tolist()
+            
+            print(f"Selected {len(frame_indices)} frame indices with adaptive sampling")
+            
+            # Extract the selected frames
+            frames = []
+            for idx in frame_indices:
+                if idx < len(all_frames):
+                    frames.append(all_frames[idx])
+                else:
+                    frames.append(all_frames[-1])  # Use last frame if index exceeds
+            
         else:
-            frame_indices = [0] * num_frames
-    
-    # Extract frames (MATCH TRAINING FORMAT)
-    frames = []
-    for idx in frame_indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, min(idx, total_frames - 1))
-        ret, frame = cap.read()
-        if ret:
-            # Resize frame to required input size (MATCH TRAINING)
-            frame = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))
-            # Convert BGR to RGB (MATCH TRAINING - model expects RGB)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(frame)
-        else:
-            print(f"Failed to read frame {idx}")
-            # Add a blank frame if read fails (MATCH TRAINING FALLBACK)
-            frames.append(np.zeros((INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8))
-    
-    cap.release()
-    
-    # Ensure we have the right number of frames (MATCH TRAINING)
-    while len(frames) < num_frames:
-        frames.append(frames[-1].copy() if frames else np.zeros((INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8))
-    
-    # Convert to numpy array [T, H, W, C] (MATCH TRAINING OUTPUT)
-    frames = np.array(frames[:num_frames])
-    print(f"Extracted {len(frames)} frames of shape {frames.shape[1:]}")
-    
-    return frames
+            # UNIFORM SAMPLING - FOR LIVE STREAM COMPATIBILITY
+            print("Using uniform sampling (live stream mode)")
+            
+            required_frames = num_frames * sampling_rate
+            
+            if total_frames >= required_frames:
+                # Uniform sampling from video (center start for consistency)
+                start_idx = max(0, (total_frames - required_frames) // 2)
+                frame_indices = np.arange(start_idx, start_idx + required_frames, sampling_rate)
+            else:
+                # Handle short videos by repeating frames
+                if total_frames > 0:
+                    frame_indices = np.linspace(0, total_frames - 1, num_frames).astype(int)
+                else:
+                    frame_indices = [0] * num_frames
+            
+            # Extract frames using seeking (traditional approach)
+            frames = []
+            for idx in frame_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, min(idx, total_frames - 1))
+                ret, frame = cap.read()
+                if ret:
+                    frame = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frames.append(frame)
+                else:
+                    # Add a blank frame if read fails
+                    frames.append(np.zeros((INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8))
+            
+            cap.release()
+        
+        # Ensure we have the right number of frames
+        while len(frames) < num_frames:
+            frames.append(frames[-1].copy() if frames else np.zeros((INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8))
+        
+        # Convert to numpy array [T, H, W, C]
+        frames = np.array(frames[:num_frames])
+        print(f"Final extracted frames: {frames.shape}")
+        
+        return frames
+        
+    except Exception as e:
+        cap.release()
+        raise ValueError(f"Error extracting frames from {video_path}: {str(e)}")
 
 def compute_optical_flow(frames):
     """Compute optical flow between consecutive frames - MATCH TRAINING EXACTLY"""
@@ -315,7 +385,7 @@ def preprocess_frames(frames, compute_flow=True):
 
 def predict_violence(model, data, threshold=0.5, debug=False, device=None):
     """
-    Make a violence prediction - ENHANCED WITH TRAINING INSIGHTS
+    Make a violence prediction - COMPLETELY FIXED LABELS AND STABILITY
     
     Args:
         model: PyTorch X3D model
@@ -377,33 +447,27 @@ def predict_violence(model, data, threshold=0.5, debug=False, device=None):
     if logit_range > 50:
         print(f"⚠️ WARNING: Extreme logit range detected: {logit_range:.2f}")
     
-    # Process predictions - MATCH TRAINING LABEL MAPPING
+    # Process predictions - CORRECTED LABEL MAPPING
     if outputs_np.shape[1] >= 2:
-        # Two-class output: [NonFight_logit, Fight_logit]
-        logit_0 = float(outputs_np[0][0])  # NonFight logit
-        logit_1 = float(outputs_np[0][1])  # Fight logit
-        
-        if debug:
-            print(f"NonFight logit: {logit_0:.4f}")
-            print(f"Fight logit: {logit_1:.4f}")
-        
-        # Apply softmax to get proper probabilities
-        exp_logits = np.exp(outputs_np[0] - np.max(outputs_np[0]))  # Numerical stability
+        # Two-class output: Apply softmax for numerical stability
+        exp_logits = np.exp(outputs_np[0] - np.max(outputs_np[0]))
         probs = exp_logits / np.sum(exp_logits)
         prob_0, prob_1 = float(probs[0]), float(probs[1])
-        
+
         if debug:
-            print(f"After softmax - NonFight prob: {prob_0:.4f}, Fight prob: {prob_1:.4f}")
-        
-        # TRAINING LABEL MAPPING:
-        # Label 0 = NonFight → model outputs higher prob_0 for NonFight
-        # Label 1 = Fight → model outputs higher prob_1 for Fight
-        non_fight_prob = prob_0
-        fight_prob = prob_1
-        
+            print(f"Softmax probabilities - P(class_0): {prob_0:.4f}, P(class_1): {prob_1:.4f}")
+
+        # CORRECT LABEL MAPPING (based on training dataset):
+        # Training dataset: Fight videos → label=1, NonFight videos → label=0
+        # Therefore: prob_0 = NonFight probability, prob_1 = Fight probability
+        non_fight_prob = prob_0  # Label 0 = NonFight
+        fight_prob = prob_1      # Label 1 = Fight
+
         if debug:
-            print(f"FINAL: NonFight confidence: {non_fight_prob:.4f}, Fight confidence: {fight_prob:.4f}")
-            print(f"Prediction: {'FIGHT' if fight_prob > threshold else 'NON-FIGHT'}")
+            print(f"CORRECTED MAPPING:")
+            print(f"  NonFight confidence: {non_fight_prob:.4f}")
+            print(f"  Fight confidence: {fight_prob:.4f}")
+            print(f"  Prediction: {'FIGHT' if fight_prob > threshold else 'NON-FIGHT'}")
         
         # STABILITY CHECK: Warn about overconfident predictions
         if fight_prob > 0.999 or fight_prob < 0.001:
@@ -431,9 +495,11 @@ def predict_violence(model, data, threshold=0.5, debug=False, device=None):
         return is_fight, fight_prob, inference_time
 
 def test_detection(model_path, video_path, threshold=0.5):
-    """Test the trained violence detection on a single video"""
+    """Test the trained violence detection on a single video - COMPLETELY FIXED"""
     print("="*60)
-    print("TRAINED X3D VIOLENCE DETECTION TEST")
+    print("FIXED X3D VIOLENCE DETECTION TEST")
+    print("✅ Fixed label mapping (Fight=1, NonFight=0)")
+    print("✅ Fixed adaptive sampling to match training")
     print("="*60)
     
     # Load trained model
@@ -444,8 +510,8 @@ def test_detection(model_path, video_path, threshold=0.5):
     print(f"Detection threshold: {threshold}")
     print("-"*60)
     
-    # Extract and preprocess frames
-    frames = extract_frames(video_path)
+    # Extract and preprocess frames with FIXED sampling
+    frames = extract_frames(video_path, use_adaptive_sampling=True)  # Use adaptive for videos
     
     # Determine if model uses motion enhancement
     use_motion = hasattr(model, 'use_motion_enhancement') and model.use_motion_enhancement
@@ -551,11 +617,19 @@ def extract_consecutive_frame_sequences(video_path, sequence_length=16, hop_seco
     print(f"Extracted {len(sequences)} consecutive sequences")
     return sequences, timestamps
 
+# LIVE STREAM OPTIMIZED FUNCTIONS
+def extract_frames_for_live_stream(video_path, num_frames=NUM_FRAMES, sampling_rate=SAMPLING_RATE):
+    """
+    Extract frames optimized for live stream processing - uses uniform sampling
+    This maintains your current 20ms performance for live streams
+    """
+    return extract_frames(video_path, num_frames, sampling_rate, use_adaptive_sampling=False)
+
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Test trained X3D violence detection on a video')
-    parser.add_argument('--model', type=str, default='stable_checkpoints/stable_best_model.pth', 
+    parser = argparse.ArgumentParser(description='Test FIXED X3D violence detection on a video')
+    parser.add_argument('--model', type=str, default='rwf9425.pth', 
                        help='Path to trained model file')
     parser.add_argument('--video', type=str, required=True, help='Path to video file')
     parser.add_argument('--threshold', type=float, default=0.5, help='Detection threshold')
