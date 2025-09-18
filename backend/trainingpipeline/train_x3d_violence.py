@@ -115,7 +115,7 @@ def parse_args():
         "--scheduler", 
         type=str, 
         default="plateau",
-        choices=["cosine", "step", "plateau", "none"],
+        choices=["cosine", "step", "plateau", "reduceLROnPlateau", "none"],
         help="Learning rate scheduler"
     )
     parser.add_argument(

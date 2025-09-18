@@ -315,18 +315,17 @@ class CUENetStyleDataset(Dataset):
             if len(all_frames) == 0:
                 raise ValueError(f"No frames extracted from video: {video_path}")
             
-            # Adaptive sampling to maximize video coverage
+            # Intelligent sampling based on video characteristics
             total_extracted = len(all_frames)
+            intelligent_sampling_rate = self._get_intelligent_sampling_rate(total_extracted)
 
-            # Calculate adaptive sampling rate based on video length
             if total_extracted >= self.clip_len:
-                adaptive_sampling_rate = max(1, total_extracted // self.clip_len)
-                required_frames = self.clip_len * adaptive_sampling_rate
+                required_frames = self.clip_len * intelligent_sampling_rate
                 
                 if total_extracted >= required_frames:
                     max_start = total_extracted - required_frames
                     start_idx = random.randint(0, max_start) if max_start > 0 else 0
-                    frame_indices = list(range(start_idx, start_idx + required_frames, adaptive_sampling_rate))
+                    frame_indices = list(range(start_idx, start_idx + required_frames, intelligent_sampling_rate))
                 else:
                     frame_indices = np.linspace(0, total_extracted - 1, self.clip_len).astype(int).tolist()
             else:
@@ -520,6 +519,17 @@ class CUENetStyleDataset(Dataset):
         if hasattr(self, 'cache_yolo_detections') and self.cache_yolo_detections:
             if hasattr(self, 'yolo_cache') and len(self.yolo_cache) > 0:
                 self._save_yolo_cache()
+
+    def _get_intelligent_sampling_rate(self, total_frames: int) -> int:
+        """Intelligent sampling based on video length and content type"""
+        frames_per_second = total_frames / self.clip_len  # Rough estimate
+        
+        if total_frames < 80:  # Very short videos - preserve temporal detail
+            return 1
+        elif frames_per_second > 8:  # Long videos - use adaptive coverage  
+            return max(1, total_frames // self.clip_len)
+        else:  # Medium videos - moderate sampling
+            return min(3, max(1, total_frames // 20))
 
 
 def create_cuenet_dataloaders(

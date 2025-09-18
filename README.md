@@ -53,9 +53,10 @@ A web-based dashboard for analyzing videos and detecting aggression using deep l
 ## Benchmark
 
 - RWF 2000 - 94.25% Validation Accuracy (New SOTA benchmark)
-- RLVS - 99.5% Validation Accuracy (SOTA Performance)
+- RLVS - 99.75% Validation Accuracy (New SOTA benchmark)
 - Hockey Fight Videos - 100% Validation Accuracy (SOTA Performance)
-- Cross Dataset Validation accuracy varies from 80-90%
+- ViolentFlows - 100% Validation Accuracy (SOTA Performance)
+- Cross Dataset Validation Accuracy varies from 80-90%
 
 ---
 
@@ -158,17 +159,21 @@ npm run dev
 
 ```bash
 # Older GPU architectures (pre-blackwell) may not allow you to use num_workers argument in which case set it to 0 when running the command
-cd backend/trainingpipeline
+cd backend
 # RWF 2000
-python train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
+python trainingpipeline/train_x3d_violence.py --dataset_path "C:\archive\RWF-2000" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
 
 # RLVS
-python split_rlvs.py --rlvs_path "C:\archive\Real Life Violence Dataset" --output_path "C:\archive\RealLifeViolenceDatasetSplit" --copy
-python train_x3d_violence.py --dataset_path "C:\archive\RealLifeViolenceDatasetSplit" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
+python datasetsplitfiles/split_rlvs.py --rlvs_path "C:\archive\Real Life Violence Dataset" --output_path "C:\archive\RealLifeViolenceDatasetSplit" --copy
+python trainingpipeline/train_x3d_violence.py --dataset_path "C:\archive\RealLifeViolenceDatasetSplit" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 1.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 336
 
 # Hockey Fights
-python hockey_split.py --input "C:\archive\HockeyFight" --output "C:\archive\HockeyFightSplit"
-python train_x3d_violence.py --dataset_path "C:\archive\HockeyFightSplit" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 2.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 224
+python datasetsplitfiles/hockey_split.py --input "C:\archive\HockeyFight" --output "C:\archive\HockeyFightSplit"
+python trainingpipeline/train_x3d_violence.py --dataset_path "C:\archive\HockeyFightSplit" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 2.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 224
+
+# ViolentFlows
+python datasetsplitfiles/violentflows_split.py --input "C:\archive\ViolentFlows" --output "C:\archive\ViolentFlowsSplit"
+python trainingpipeline/train_x3d_violence.py --dataset_path "C:\archive\ViolentFlowsSplit" --batch_size 8 --num_epochs 30 --learning_rate 5e-5 --gradient_clip_val 2.0 --warmup_epochs 3 --scheduler plateau --mixed_precision --checkpoint_dir train_checkpoints --num_workers 8 --spatial_size 224
 
 ```
 
@@ -208,14 +213,23 @@ npm run test:coverage       # With coverage
 
 ```
 backend
-├── hockey100.pth
 ├── main.py
 ├── model.py
 ├── torch_detection.py
-├── rlvs9950.pth
-├── rwf9425.pth
-├── trainingpipeline
+├── datasetsplitfiles
+│   ├── hockey_split.py
 │   ├── split_rlvs.py
+│   └── violentflows_split.py
+├── models
+│   ├── hfrand100.pth
+│   ├── hfrand100e30.pth
+│   ├── hfs429750.pth
+│   ├── rlvs9950.pth
+│   ├── rwf9425.pth
+│   ├── vfrand100.pth
+│   ├── vfrand100e28.pth
+│   └── vfs4298.pth
+├── trainingpipeline
 │   ├── testval.py
 │   ├── train_x3d_violence.py
 │   ├── x3d_dataset.py
