@@ -234,8 +234,8 @@ def detect_rlvs_structure(rlvs_path: Path) -> Tuple[List[Path], List[Path]]:
 
 
 def split_videos(violence_videos: List[Path], nonviolence_videos: List[Path], 
-                train_ratio: float = 0.8) -> Tuple[List[Path], List[Path], List[Path], List[Path]]:
-    """Split videos with detailed reporting"""
+                train_ratio: float = 0.8, force_val_size: int = None) -> Tuple[List[Path], List[Path], List[Path], List[Path]]:
+    """Split videos with option to force exact validation size"""
     print(f"\n{'='*60}")
     print(f"SPLITTING VIDEOS INTO TRAIN/VAL")
     print(f"{'='*60}")
@@ -244,9 +244,21 @@ def split_videos(violence_videos: List[Path], nonviolence_videos: List[Path],
     random.shuffle(violence_videos)
     random.shuffle(nonviolence_videos)
     
-    # Calculate split points
-    violence_split = int(len(violence_videos) * train_ratio)
-    nonviolence_split = int(len(nonviolence_videos) * train_ratio)
+    if force_val_size is not None:
+        # Force exact validation size for each class
+        val_size_violence = min(force_val_size, len(violence_videos))
+        val_size_nonviolence = min(force_val_size, len(nonviolence_videos))
+        
+        violence_split = len(violence_videos) - val_size_violence
+        nonviolence_split = len(nonviolence_videos) - val_size_nonviolence
+        
+        print(f"Forced validation size: {force_val_size} per class")
+        print(f"Actual validation sizes: Violence={val_size_violence}, Non-violence={val_size_nonviolence}")
+    else:
+        # Calculate split points using ratio
+        violence_split = int(len(violence_videos) * train_ratio)
+        nonviolence_split = int(len(nonviolence_videos) * train_ratio)
+        print(f"Train ratio: {train_ratio}")
     
     # Split violence videos
     train_violence = violence_videos[:violence_split]
@@ -256,9 +268,7 @@ def split_videos(violence_videos: List[Path], nonviolence_videos: List[Path],
     train_nonviolence = nonviolence_videos[:nonviolence_split]
     val_nonviolence = nonviolence_videos[nonviolence_split:]
     
-    print(f"Split configuration:")
-    print(f"  Train ratio: {train_ratio}")
-    print(f"  Random seed: {random.getstate()[1][0]}")  # Get first element of random state
+    print(f"Random seed: {random.getstate()[1][0]}")  # Get first element of random state
     
     print(f"\nSplit results:")
     print(f"  TRAIN:")
@@ -273,8 +283,14 @@ def split_videos(violence_videos: List[Path], nonviolence_videos: List[Path],
     
     print(f"  GRAND TOTAL: {len(violence_videos) + len(nonviolence_videos)}")
     
+    # Verify the split ratios
+    total_samples = len(violence_videos) + len(nonviolence_videos)
+    train_samples = len(train_violence) + len(train_nonviolence)
+    actual_train_ratio = train_samples / total_samples
+    print(f"  Actual train ratio: {actual_train_ratio:.3f}")
+    
     return train_violence, val_violence, train_nonviolence, val_nonviolence
-
+    
 
 def create_rwf_structure(output_path: Path, train_violence: List[Path], val_violence: List[Path],
                         train_nonviolence: List[Path], val_nonviolence: List[Path],
@@ -375,6 +391,8 @@ def main():
                        help="Output directory for RWF-2000 structure")
     parser.add_argument("--train_ratio", type=float, default=0.8,
                        help="Ratio of data for training (default: 0.8)")
+    parser.add_argument("--force_val_size", type=int, default=200,
+                       help="Force exact validation size per class (default: 200)")
     parser.add_argument("--copy", action="store_true", default=False,
                        help="Copy files instead of moving them")
     parser.add_argument("--seed", type=int, default=42,
@@ -399,6 +417,7 @@ def main():
     print(f"RLVS path: {rlvs_path}")
     print(f"Output path: {output_path}")
     print(f"Train ratio: {args.train_ratio}")
+    print(f"Forced validation size: {args.force_val_size} per class")
     print(f"Operation: {'Copy' if args.copy else 'Move'}")
     print(f"Random seed: {args.seed}")
     print("="*60)
@@ -411,9 +430,9 @@ def main():
             print("ABORTING: Could not properly classify videos")
             return
         
-        # Step 2: Split into train/val
+        # Step 2: Split into train/val with forced validation size
         train_violence, val_violence, train_nonviolence, val_nonviolence = split_videos(
-            violence_videos, nonviolence_videos, args.train_ratio
+            violence_videos, nonviolence_videos, args.train_ratio, args.force_val_size
         )
         
         # Step 3: Create RWF-2000 structure
