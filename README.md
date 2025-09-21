@@ -181,15 +181,37 @@ python trainingpipeline/train_x3d_violence.py --dataset_path "C:\archive\Violent
 
 ## Running Tests
 
-**Testing Model Performance on Val split of a dataset**
+**System Integration Tests (New)**
+```bash
+cd backend/tests
+
+# Quick system validation - tests core initialization
+python test_init.py
+
+# Multi-stream performance testing with simulated data
+python test_multistream_simple.py
+
+# Comprehensive integration testing
+python test_integration.py
+
+# Direct batch processing validation
+python test_batch_direct.py
+
+# Dummy stream generator for load testing
+python test_dummy_streams.py
+
+# Multi-stream API testing (requires running server)
+python test_multistream.py
+```
+
+**Model Performance Testing**
 ```bash
 # This can be used to get measure variance of a model on a dataset's val split or to test cross dataset accuracy
 cd backend/trainingpipeline
 python testval.py --dataset "path/to/dataset" --model "path/to/model.pth" --runs 5 --output "my_custom_output_folder"
 ```
 
-**Backend tests:**
-
+**Unit & Component Tests**
 ```bash
 cd backend/tests
 python run_tests.py quick   # Quick tests
@@ -198,8 +220,7 @@ python run_tests.py all     # Full suite
 python run_tests.py coverage
 ```
 
-**Frontend tests:**
-
+**Frontend Tests**
 ```bash
 cd frontend/tests
 npm test                    # Watch mode

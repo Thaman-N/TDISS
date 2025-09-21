@@ -28,6 +28,6 @@ CLAUDE.md
 ignore_*.*
 *_ignore/
 diagnostic_*.py
-
+.github/
 # System files
 .DS_Store
