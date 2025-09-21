@@ -234,37 +234,50 @@ npm run test:coverage       # With coverage
 
 ```
 backend
-├── main.py
-├── model.py
-├── torch_detection.py
-├── datasetsplitfiles
+├── main.py                      # FastAPI server with WebSocket streaming
+├── model.py                     # X3D violence detection model
+├── torch_detection.py           # Model loading and inference functions
+├── batch_processing.py          # Centralized batch inference system
+├── enhanced_database.py         # Event storage and stitching
+├── infrastructure_managers.py   # RTSP, GPU, filesystem management
+├── integration_system.py        # Master orchestration system
+├── smart_notifications.py       # Discord webhook notifications
+├── stream_collection.py         # Frame collection and buffering
+├── datasetsplitfiles/
 │   ├── hockey_split.py
 │   ├── split_rlvs.py
 │   └── violentflows_split.py
-├── models
+├── models/                      # Trained model files (excluded from git)
 │   ├── hfrand100.pth
 │   ├── hfrand100e30.pth
 │   ├── hfs429750.pth
-│   ├── rlvs9950.pth
+│   ├── rlvss429975.pth
 │   ├── rwf9425.pth
 │   ├── vfrand100.pth
 │   ├── vfrand100e28.pth
 │   └── vfs4298.pth
-├── trainingpipeline
-│   ├── testval.py
-│   ├── train_x3d_violence.py
-│   ├── x3d_dataset.py
-│   ├── x3d_model.py
-│   └── x3d_trainer.py
-└── tests
-    ├── pytest.ini
-    ├── run_tests.py
-    ├── test_api.py
-    ├── test_database.py
-    ├── test_detection.py
-    ├── test_model.py
-    ├── test_requirements.txt
-    └── test_utils.py
+├── trainingpipeline/
+│   ├── testval.py               # Model validation on datasets
+│   ├── train_x3d_violence.py    # Training script
+│   ├── x3d_dataset.py          # Dataset loading utilities
+│   ├── x3d_model.py            # Model architecture definitions
+│   └── x3d_trainer.py          # Training pipeline
+├── tests/
+│   ├── pytest.ini
+│   ├── run_tests.py            # Test runner
+│   ├── test_api.py             # API endpoint tests
+│   ├── test_database.py        # Database operation tests
+│   ├── test_detection.py       # Model inference tests
+│   ├── test_model.py           # Model architecture tests
+│   ├── test_utils.py           # Utility function tests
+│   ├── test_requirements.txt
+│   ├── test_init.py            # System initialization test
+│   ├── test_integration.py     # Full integration test suite
+│   ├── test_multistream.py     # Multi-stream API testing
+│   ├── test_multistream_simple.py  # Performance validation
+│   ├── test_batch_direct.py    # Batch processing validation
+│   └── test_dummy_streams.py   # Load testing with generated streams
+└── data/                       # Runtime data directory
 
 frontend
 ├── public
