@@ -61,11 +61,6 @@ def secure_filename(filename):
 # Import your PyTorch detection module (copy these files to the same directory)
 from torch_detection import load_violence_detection_model, extract_frames, preprocess_frames, predict_violence, extract_consecutive_frame_sequences
 
-# NEW: Import batch processing system
-from infrastructure_managers import RTSPConnectionManager, GPUMemoryManager, FileSystemManager, DatabaseConnectionPool
-from batch_processing import BatchInferenceManager, SharedResourcePool, FrameData, BatchResult
-from stream_collection import StreamFrameCollector, StreamCollectionManager
-
 # Event storage classes
 DB_PATH = "violence_events.db"
 MAX_EVENT_CLIP_DURATION = 30  # seconds
@@ -1849,14 +1844,7 @@ manager = ConnectionManager()
 # Load model at startup
 model = None
 
-# NEW: Batch processing system globals
-batch_inference_manager = None
-stream_collection_manager = None
-connection_manager = None
-gpu_memory_manager = None
-shared_resource_pool = None
-
-# OLD: Stream management globals (kept for compatibility during transition)
+# Stream management globals
 active_streams: Dict[int, dict] = {}
 stream_db = None
 executor = ThreadPoolExecutor(max_workers=4)
@@ -1902,24 +1890,6 @@ def cleanup_all_streams():
     except Exception as e:
         print(f"Error during executor shutdown: {e}")
     
-    # NEW: Stop batch processing system first
-    try:
-        if stream_collection_manager:
-            print("Stopping stream collection manager...")
-            stream_collection_manager.stop_all_collections()
-            
-        if batch_inference_manager:
-            print("Stopping batch inference manager...")
-            batch_inference_manager.stop()
-            
-        if shared_resource_pool:
-            print("Stopping shared resource pool...")
-            shared_resource_pool.stop()
-            
-        print("Batch processing system stopped")
-    except Exception as e:
-        print(f"Error stopping batch processing system: {e}")
-
     # Update database status for all streams
     if stream_db:
         try:
@@ -1932,15 +1902,7 @@ def cleanup_all_streams():
         except Exception as e:
             print(f"Error updating stream status: {e}")
     
-    # NEW: Cleanup GPU memory
-    if gpu_memory_manager:
-        try:
-            gpu_memory_manager.cleanup_gpu_memory(force=True)
-            print("GPU memory cleanup completed")
-        except Exception as e:
-            print(f"Error during GPU cleanup: {e}")
-    
-    print("Complete system cleanup completed")
+    print("All streams cleaned up")
 
 # Add this new function to handle startup recovery:
 def recover_stream_states():
@@ -2001,184 +1963,6 @@ async def check_stream_health():
                 print(f"Error during stream health check: {e}")
     
     print("Stream health check stopped")
-
-
-async def batch_system_monitoring():
-    """Background task to monitor batch processing system performance"""
-    while not global_shutdown_event.is_set():
-        try:
-            await asyncio.sleep(60)  # Monitor every minute
-            
-            if global_shutdown_event.is_set():
-                break
-            
-            if not batch_inference_manager or not stream_collection_manager:
-                continue
-            
-            # Get system statistics
-            batch_stats = batch_inference_manager.get_statistics()
-            collection_stats = stream_collection_manager.get_all_statistics()
-            
-            # Log detailed statistics
-            print("=== Batch System Performance ===")
-            print(f"Active Streams: {collection_stats['active_streams']}")
-            print(f"Total Batches Processed: {batch_stats['total_batches']}")
-            print(f"Average Batch Size: {batch_stats['avg_batch_size']:.1f}")
-            print(f"Average Processing Time: {batch_stats['avg_processing_time']:.3f}s")
-            print(f"GPU Memory Usage: {batch_stats['gpu_info'].get('utilization_percent', 0):.1f}%")
-            print(f"Bandwidth Usage: {collection_stats['connection_manager'].get('utilization_percent', 0):.1f}%")
-            
-            # Performance warnings
-            if batch_stats['avg_processing_time'] > 5.0:
-                print("⚠️ WARNING: High batch processing time detected")
-            
-            if batch_stats['queue_sizes']['batch_queue'] > 10:
-                print("⚠️ WARNING: Batch queue backup detected")
-            
-            if collection_stats['connection_manager'].get('utilization_percent', 0) > 80:
-                print("⚠️ WARNING: High bandwidth utilization")
-            
-            # Cleanup resources periodically
-            if shared_resource_pool:
-                shared_resource_pool.cleanup_resources()
-            
-            print("==============================")
-            
-        except Exception as e:
-            if not global_shutdown_event.is_set():
-                print(f"Error in batch system monitoring: {e}")
-            await asyncio.sleep(120)  # Wait longer on errors
-    
-    print("Batch system monitoring stopped")
-
-
-def save_batch_detection_event(result: BatchResult):
-    """Save violence detection event from batch processing result"""
-    try:
-        current_time = time.time()
-        timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Get recent frames for stitching (from frame_data buffer_frames)
-        recent_frames = result.frame_data.buffer_frames if result.frame_data.buffer_frames else []
-        
-        # Check if this should be stitched to existing incident
-        should_stitch = stitching_manager.should_stitch_to_existing(result.stream_id, current_time)
-        
-        # Generate thumbnail using shared resource pool
-        thumbnail_url = ""
-        if shared_resource_pool and recent_frames:
-            thumbnail_url = shared_resource_pool.save_thumbnail(
-                result.stream_id, 
-                recent_frames[-1],  # Use latest frame
-                current_time
-            ) or ""
-        
-        # Generate clip using shared resource pool
-        clip_url = ""
-        if shared_resource_pool and recent_frames:
-            clip_url = shared_resource_pool.save_clip(
-                result.stream_id,
-                recent_frames[-10:],  # Last 10 frames
-                current_time
-            ) or ""
-        
-        # Create violence event
-        event = ViolenceEvent(
-            timestamp=timestamp_str,
-            source_type="stream",
-            source_id=str(result.stream_id),
-            filename=f"stream_{result.stream_id}",
-            start_time=result.frame_data.sequence_start_time,
-            end_time=result.frame_data.sequence_end_time,
-            duration=result.frame_data.sequence_end_time - result.frame_data.sequence_start_time,
-            confidence=result.confidence,
-            thumbnail_path=thumbnail_url,
-            clip_path=clip_url,
-            metadata=json.dumps({
-                "stream_name": result.frame_data.metadata.get('stream_name', ''),
-                "inference_time": result.inference_time,
-                "batch_processed": True,
-                "collection_stats": result.frame_data.metadata.get('collection_stats', {})
-            }),
-            incident_status="active"
-        )
-        
-        # Save event
-        event_id = event_db.save_event(event)
-        
-        if should_stitch:
-            # Extend existing incident
-            stitching_manager.extend_incident(
-                result.stream_id, 
-                current_time, 
-                result.confidence, 
-                recent_frames[-5:] if recent_frames else [],  # Just a few recent frames
-                event_id
-            )
-        else:
-            # Start new incident
-            incident_id = stitching_manager.start_new_incident(
-                result.stream_id,
-                result.frame_data.metadata.get('stream_name', f'Stream {result.stream_id}'),
-                current_time,
-                result.confidence,
-                recent_frames[-10:] if recent_frames else [],  # Buffer frames for incident
-                event_id
-            )
-        
-        # Update stream statistics
-        if stream_db:
-            stream_db.increment_detection_count(result.stream_id)
-            
-        print(f"Saved batch detection event for stream {result.stream_id}: {event_id}")
-        
-    except Exception as e:
-        print(f"Error saving batch detection event for stream {result.stream_id}: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-async def send_violence_alert_ws(result: BatchResult):
-    """Send real-time WebSocket alert for violence detection"""
-    try:
-        stream_name = result.frame_data.metadata.get('stream_name', f'Stream {result.stream_id}')
-        
-        alert_data = {
-            'type': 'violence_alert',
-            'stream_id': result.stream_id,
-            'stream_name': stream_name,
-            'confidence': result.confidence,
-            'timestamp': result.timestamp,
-            'detection_system': 'batch_processing',
-            'inference_time': result.inference_time,
-            'message': f'Violence detected in {stream_name} with {result.confidence:.1%} confidence'
-        }
-        
-        # Send via WebSocket manager
-        await manager.send_job_update(f"violence_alert_{result.stream_id}", alert_data)
-        
-        # Also send Discord notification
-        if discord_notifier and discord_notifier.enabled:
-            thumbnail_b64 = ""
-            if result.frame_data.buffer_frames:
-                try:
-                    latest_frame = result.frame_data.buffer_frames[-1]
-                    # Convert to base64 for Discord
-                    _, buffer = cv2.imencode('.jpg', latest_frame)
-                    thumbnail_b64 = base64.b64encode(buffer).decode('utf-8')
-                except Exception:
-                    pass
-            
-            discord_notifier.send_violence_alert(
-                stream_name=stream_name,
-                confidence=result.confidence,
-                timestamp=result.timestamp,
-                thumbnail_b64=thumbnail_b64
-            )
-        
-    except Exception as e:
-        print(f"Error sending violence alert for stream {result.stream_id}: {e}")
-
 
 def signal_handler(signum, frame):
     """Handle Ctrl+C gracefully - only run once"""
@@ -3008,85 +2792,45 @@ async def cleanup_uploaded_file(file_path: str, delay_hours: int = FILE_CLEANUP_
     except Exception as e:
         print(f"Error cleaning up file {file_path}: {e}")
 
-# Import integration system
-from integration_system import initialize_system, get_system, cleanup_system, StreamConfiguration
-
 @app.on_event("startup")
 async def startup_event():
     global model, event_db, stream_db, stitching_manager, discord_notifier
     try:
-        print("Starting up Violence Detection API with Integrated Batch Processing System...")
+        print("Starting up Violence Detection API...")
 
-        # Initialize legacy database components for backward compatibility
-        print("Initializing legacy databases...")
+        # Initialize databases
+        print("Initializing databases...")
         event_db = EventDatabase()
         stream_db = StreamDatabase()
         stitching_manager = EventStitchingManager()
-        
-        # Initialize Discord notifier (legacy)
+        print("Databases and stitching manager initialized successfully")
+
+        # Initialize Discord notifier - ADD THIS BLOCK
         print("Initializing Discord notifications...")
         discord_notifier = DiscordNotifier(DISCORD_WEBHOOK_URL, DISCORD_NOTIFICATIONS_ENABLED)
-        
-        # Load model for legacy endpoints
-        print("Loading model...")
-        model, _ = load_violence_detection_model(MODEL_PATH)
-        print("Model loaded successfully")
-
-        # Initialize the new integrated system
-        print("Initializing integrated violence detection system...")
-        system_config = {
-            'model_path': MODEL_PATH,
-            'device': 'cuda',
-            'max_streams': 12,
-            'max_batch_size': 8,
-            'detection_threshold': DETECTION_THRESHOLD,
-            'max_rtsp_connections': 12,
-            'bandwidth_limit_mbps': 50.0,
-            'max_gpu_memory_gb': 6.0,  # Changed to match GPUMemoryManager
-            'min_batch_size': 1,
-            'default_batch_size': 4,
-            'storage_path': './data',
-            'max_storage_gb': 50,
-            'db_path': DB_PATH,
-            'max_db_connections': 10,
-            'discord_webhook_url': DISCORD_WEBHOOK_URL,
-            'notifications_per_stream': 1,
-            'notifications_per_hour': 10,
-            'critical_burst_limit': 3,
-            'notification_window': 300,
-            'queue_timeout': 5.0,
-            'db_batch_size': 50,
-            'db_flush_interval': 5.0
-        }
-        
-        system_initialized = await initialize_system(system_config)
-        
-        if system_initialized:
-            print("Integrated system initialized successfully")
-            
-            # Send startup notification
-            if discord_notifier.enabled:
-                discord_notifier.send_system_status(
-                    "Violence Detection System with Integrated Batch Processing started successfully! 🚀", 
-                    "success"
-                )
-        else:
-            print("WARNING: Integrated system failed to initialize - falling back to legacy mode")
+        if discord_notifier.enabled:
+            discord_notifier.send_system_status(
+                "Violence Detection System started successfully! 🚀", 
+                "success"
+            )
 
         # Recover stream states from previous shutdown
         recover_stream_states()
 
+        print("Loading model...")
+        model, _ = load_violence_detection_model(MODEL_PATH)
+        print("Model loaded successfully")
+
         # Start background tasks
         asyncio.create_task(periodic_cleanup())
         asyncio.create_task(check_stream_health())
-        asyncio.create_task(system_monitoring())  # NEW: Monitor integrated system
         print("Background tasks started")
 
         # Load existing history
         await load_history_from_file()
         print("History loaded")
 
-        print("Violence Detection API started successfully!")
+        print("Violence Detection API started successfully")
 
     except Exception as e:
         print(f"Error during startup: {e}")
@@ -3102,37 +2846,7 @@ async def shutdown_event():
     print("FastAPI shutdown event triggered")
     
     if not shutdown_in_progress:
-        # Cleanup integrated system first
-        await cleanup_system()
-        # Then cleanup legacy streams
         cleanup_all_streams()
-
-async def system_monitoring():
-    """Monitor the integrated system performance and health"""
-    while True:
-        try:
-            await asyncio.sleep(60)  # Monitor every minute
-            
-            system = await get_system()
-            if system:
-                status = await system.get_system_status()
-                
-                # Log system health metrics
-                print(f"System Status - Active Streams: {status['active_streams']}, "
-                      f"Frames Processed: {status['total_frames_processed']}, "
-                      f"GPU Memory: {status['gpu_memory_usage']:.1%}, "
-                      f"Errors: {status['error_count']}")
-                
-                # Check for high error rates or resource issues
-                if status['error_count'] > 50:
-                    print("WARNING: High error count detected in system")
-                
-                if status['gpu_memory_usage'] > 0.9:
-                    print("WARNING: High GPU memory usage detected")
-                    
-        except Exception as e:
-            print(f"Error in system monitoring: {e}")
-            await asyncio.sleep(30)  # Shorter retry interval on error
 
 async def load_history_from_file():
     """Load history from file if it exists"""
@@ -4200,141 +3914,57 @@ async def get_streams():
 
 @app.post("/api/streams/{stream_id}/start")
 async def start_stream(stream_id: int):
-    """Start an RTSP stream - NEW: Uses integrated batch processing system"""
+    """Start an RTSP stream"""
     try:
-        # Check integrated system first
-        system = await get_system()
-        
-        if system:
-            # Use new integrated system
-            streams = stream_db.get_streams()
-            stream_data = next((s for s in streams if s['id'] == stream_id), None)
+        if stream_id in active_streams:
+            return {"success": False, "message": "Stream already active"}
 
-            if not stream_data:
-                raise HTTPException(status_code=404, detail="Stream not found")
+        # Get stream from database
+        streams = stream_db.get_streams()
+        stream_data = next((s for s in streams if s['id'] == stream_id), None)
 
-            # Create stream configuration for integrated system
-            stream_config = StreamConfiguration(
-                stream_id=str(stream_id),
-                rtsp_url=stream_data['rtsp_url'],
-                stream_name=stream_data['name'],
-                detection_threshold=DETECTION_THRESHOLD,
-                priority_level=1  # High priority
-            )
+        if not stream_data:
+            raise HTTPException(status_code=404, detail="Stream not found")
 
-            success = await system.start_stream(stream_config)
+        # Start stream processor
+        processor = RTSPStreamProcessor(stream_id, stream_data['rtsp_url'], stream_data['name'])
+
+        if processor.start_stream():
+            stream_db.update_stream_status(stream_id, 'active')
             
-            if success:
-                stream_db.update_stream_status(stream_id, 'active')
-                
-                # Send notification via integrated system
-                if discord_notifier and discord_notifier.enabled:
-                    discord_notifier.send_system_status(
-                        f"Stream **{stream_data['name']}** (ID: {stream_id}) started with batch processing",
-                        "info"
-                    )
-                
-                return {"success": True, "message": "Stream started with batch processing"}
-            else:
-                stream_db.update_stream_status(stream_id, 'error')
-                
-                if discord_notifier and discord_notifier.enabled:
-                    discord_notifier.send_system_status(
-                        f"Failed to start stream **{stream_data['name']}** (ID: {stream_id}) in batch system",
-                        "error"
-                    )
-                
-                return {"success": False, "message": "Failed to start stream in batch system"}
-        
+            # ADD THIS DISCORD NOTIFICATION
+            if discord_notifier and discord_notifier.enabled:
+                discord_notifier.send_system_status(
+                    f"Stream **{stream_data['name']}** (ID: {stream_id}) started monitoring",
+                    "info"
+                )
+            
+            return {"success": True, "message": "Stream started"}
         else:
-            # Fallback to legacy system
-            if stream_id in active_streams:
-                return {"success": False, "message": "Stream already active"}
-
-            # Get stream from database
-            streams = stream_db.get_streams()
-            stream_data = next((s for s in streams if s['id'] == stream_id), None)
-
-            if not stream_data:
-                raise HTTPException(status_code=404, detail="Stream not found")
-
-            # Start legacy stream processor
-            processor = RTSPStreamProcessor(stream_id, stream_data['rtsp_url'], stream_data['name'])
-
-            if processor.start_stream():
-                stream_db.update_stream_status(stream_id, 'active')
-                
-                if discord_notifier and discord_notifier.enabled:
-                    discord_notifier.send_system_status(
-                        f"Stream **{stream_data['name']}** (ID: {stream_id}) started (legacy mode)",
-                        "info"
-                    )
-                
-                return {"success": True, "message": "Stream started (legacy mode)"}
-            else:
-                stream_db.update_stream_status(stream_id, 'error')
-                
-                if discord_notifier and discord_notifier.enabled:
-                    discord_notifier.send_system_status(
-                        f"Failed to start stream **{stream_data['name']}** (ID: {stream_id})",
-                        "error"
-                    )
-                
-                return {"success": False, "message": "Failed to start stream"}
+            stream_db.update_stream_status(stream_id, 'error')
+            
+            # ADD THIS DISCORD ERROR NOTIFICATION  
+            if discord_notifier and discord_notifier.enabled:
+                discord_notifier.send_system_status(
+                    f"Failed to start stream **{stream_data['name']}** (ID: {stream_id})",
+                    "error"
+                )
+            
+            return {"success": False, "message": "Failed to start stream"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/streams/{stream_id}/stop")
 async def stop_stream(stream_id: int):
-    """Stop an RTSP stream - NEW: Uses integrated batch processing system"""
+    """Stop an RTSP stream"""
     try:
-        # Check integrated system first
-        system = await get_system()
-        
-        if system:
-            # Use new integrated system
-            success = await system.stop_stream(str(stream_id))
-            
-            if success:
-                stream_db.update_stream_status(stream_id, 'inactive')
-                
-                # Get stream name for notification
-                streams = stream_db.get_streams()
-                stream_data = next((s for s in streams if s['id'] == stream_id), None)
-                stream_name = stream_data['name'] if stream_data else f"Stream {stream_id}"
-                
-                if discord_notifier and discord_notifier.enabled:
-                    discord_notifier.send_system_status(
-                        f"Stream **{stream_name}** (ID: {stream_id}) stopped",
-                        "info"
-                    )
-                
-                return {"success": True, "message": "Stream stopped"}
-            else:
-                return {"success": False, "message": "Failed to stop stream in batch system"}
-        
+        if stream_id in active_streams:
+            active_streams[stream_id]['processor'].stop_stream()
+            stream_db.update_stream_status(stream_id, 'inactive')
+            return {"success": True, "message": "Stream stopped"}
         else:
-            # Fallback to legacy system
-            if stream_id in active_streams:
-                active_streams[stream_id]['processor'].stop_stream()
-                stream_db.update_stream_status(stream_id, 'inactive')
-                
-                # Get stream name for notification
-                streams = stream_db.get_streams()
-                stream_data = next((s for s in streams if s['id'] == stream_id), None)
-                stream_name = stream_data['name'] if stream_data else f"Stream {stream_id}"
-                
-                if discord_notifier and discord_notifier.enabled:
-                    discord_notifier.send_system_status(
-                        f"Stream **{stream_name}** (ID: {stream_id}) stopped (legacy mode)",
-                        "info"
-                    )
-                
-                return {"success": True, "message": "Stream stopped (legacy mode)"}
-            else:
-                return {"success": False, "message": "Stream not active"}
-                
+            return {"success": False, "message": "Stream not active"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

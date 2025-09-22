@@ -181,37 +181,15 @@ python trainingpipeline/train_x3d_violence.py --dataset_path "C:\archive\Violent
 
 ## Running Tests
 
-**System Integration Tests (New)**
-```bash
-cd backend/tests
-
-# Quick system validation - tests core initialization
-python test_init.py
-
-# Multi-stream performance testing with simulated data
-python test_multistream_simple.py
-
-# Comprehensive integration testing
-python test_integration.py
-
-# Direct batch processing validation
-python test_batch_direct.py
-
-# Dummy stream generator for load testing
-python test_dummy_streams.py
-
-# Multi-stream API testing (requires running server)
-python test_multistream.py
-```
-
-**Model Performance Testing**
+**Testing Model Performance on Val split of a dataset**
 ```bash
 # This can be used to get measure variance of a model on a dataset's val split or to test cross dataset accuracy
 cd backend/trainingpipeline
 python testval.py --dataset "path/to/dataset" --model "path/to/model.pth" --runs 5 --output "my_custom_output_folder"
 ```
 
-**Unit & Component Tests**
+**Backend tests:**
+
 ```bash
 cd backend/tests
 python run_tests.py quick   # Quick tests
@@ -220,7 +198,8 @@ python run_tests.py all     # Full suite
 python run_tests.py coverage
 ```
 
-**Frontend Tests**
+**Frontend tests:**
+
 ```bash
 cd frontend/tests
 npm test                    # Watch mode
@@ -234,50 +213,37 @@ npm run test:coverage       # With coverage
 
 ```
 backend
-├── main.py                      # FastAPI server with WebSocket streaming
-├── model.py                     # X3D violence detection model
-├── torch_detection.py           # Model loading and inference functions
-├── batch_processing.py          # Centralized batch inference system
-├── enhanced_database.py         # Event storage and stitching
-├── infrastructure_managers.py   # RTSP, GPU, filesystem management
-├── integration_system.py        # Master orchestration system
-├── smart_notifications.py       # Discord webhook notifications
-├── stream_collection.py         # Frame collection and buffering
-├── datasetsplitfiles/
+├── main.py
+├── model.py
+├── torch_detection.py
+├── datasetsplitfiles
 │   ├── hockey_split.py
 │   ├── split_rlvs.py
 │   └── violentflows_split.py
-├── models/                      # Trained model files (excluded from git)
+├── models
 │   ├── hfrand100.pth
 │   ├── hfrand100e30.pth
 │   ├── hfs429750.pth
-│   ├── rlvss429975.pth
+│   ├── rlvs9950.pth
 │   ├── rwf9425.pth
 │   ├── vfrand100.pth
 │   ├── vfrand100e28.pth
 │   └── vfs4298.pth
-├── trainingpipeline/
-│   ├── testval.py               # Model validation on datasets
-│   ├── train_x3d_violence.py    # Training script
-│   ├── x3d_dataset.py          # Dataset loading utilities
-│   ├── x3d_model.py            # Model architecture definitions
-│   └── x3d_trainer.py          # Training pipeline
-├── tests/
-│   ├── pytest.ini
-│   ├── run_tests.py            # Test runner
-│   ├── test_api.py             # API endpoint tests
-│   ├── test_database.py        # Database operation tests
-│   ├── test_detection.py       # Model inference tests
-│   ├── test_model.py           # Model architecture tests
-│   ├── test_utils.py           # Utility function tests
-│   ├── test_requirements.txt
-│   ├── test_init.py            # System initialization test
-│   ├── test_integration.py     # Full integration test suite
-│   ├── test_multistream.py     # Multi-stream API testing
-│   ├── test_multistream_simple.py  # Performance validation
-│   ├── test_batch_direct.py    # Batch processing validation
-│   └── test_dummy_streams.py   # Load testing with generated streams
-└── data/                       # Runtime data directory
+├── trainingpipeline
+│   ├── testval.py
+│   ├── train_x3d_violence.py
+│   ├── x3d_dataset.py
+│   ├── x3d_model.py
+│   └── x3d_trainer.py
+└── tests
+    ├── pytest.ini
+    ├── run_tests.py
+    ├── test_api.py
+    ├── test_database.py
+    ├── test_detection.py
+    ├── test_model.py
+    ├── test_requirements.txt
+    └── test_utils.py
 
 frontend
 ├── public
