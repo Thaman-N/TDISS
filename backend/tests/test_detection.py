@@ -25,27 +25,25 @@ class TestExtractFrames:
     @patch('cv2.VideoCapture')
     def test_extract_frames_success(self, mock_video_capture):
         """Test successful frame extraction"""
-        # Mock video capture
         mock_cap = Mock()
         mock_cap.isOpened.return_value = True
         mock_cap.get.side_effect = lambda prop: {
             cv2.CAP_PROP_FRAME_COUNT: 100,
             cv2.CAP_PROP_FPS: 30.0
         }.get(prop, 0)
-        
-        # Mock frame reading
         dummy_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        mock_cap.read.return_value = (True, dummy_frame)
+        def read_side_effect():
+            for _ in range(100):
+                yield (True, dummy_frame)
+            while True:
+                yield (False, None)
+        mock_cap.read.side_effect = read_side_effect()
         mock_cap.set.return_value = None
         mock_cap.release.return_value = None
-        
         mock_video_capture.return_value = mock_cap
-        
-        # Test frame extraction (updated to match new INPUT_SIZE = 336)
         frames = extract_frames("dummy_video.mp4", num_frames=16)
-        
         assert isinstance(frames, np.ndarray)
-        assert frames.shape == (16, 336, 336, 3)  # Updated size
+        assert frames.shape == (16, 336, 336, 3)
         assert frames.dtype == np.uint8
     
     @patch('cv2.VideoCapture')
@@ -67,18 +65,18 @@ class TestExtractFrames:
             cv2.CAP_PROP_FRAME_COUNT: 5,  # Very short video
             cv2.CAP_PROP_FPS: 30.0
         }.get(prop, 0)
-        
         dummy_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        mock_cap.read.return_value = (True, dummy_frame)
+        def read_side_effect():
+            for _ in range(5):
+                yield (True, dummy_frame)
+            while True:
+                yield (False, None)
+        mock_cap.read.side_effect = read_side_effect()
         mock_cap.set.return_value = None
         mock_cap.release.return_value = None
-        
         mock_video_capture.return_value = mock_cap
-        
         frames = extract_frames("short_video.mp4", num_frames=16)
-        
-        # Should still return 16 frames (with repetition)
-        assert frames.shape == (16, 336, 336, 3)  # Updated size
+        assert frames.shape == (16, 336, 336, 3)
 
 
 class TestComputeOpticalFlow:
@@ -372,7 +370,7 @@ class TestIntegration:
         """Test the full pipeline from frame extraction to prediction"""
         # Mock time for inference timing
         mock_time.side_effect = [0.0, 0.15]  # start_time, end_time
-        
+
         # Mock video capture
         mock_cap = Mock()
         mock_cap.isOpened.return_value = True
@@ -380,36 +378,41 @@ class TestIntegration:
             cv2.CAP_PROP_FRAME_COUNT: 50,
             cv2.CAP_PROP_FPS: 30.0
         }.get(prop, 0)
-        
+
         dummy_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        mock_cap.read.return_value = (True, dummy_frame)
+        def read_side_effect():
+            for _ in range(50):
+                yield (True, dummy_frame)
+            while True:
+                yield (False, None)
+        mock_cap.read.side_effect = read_side_effect()
         mock_cap.set.return_value = None
         mock_cap.release.return_value = None
         mock_video_capture.return_value = mock_cap
-        
+
         # Extract frames
         frames = extract_frames("dummy_video.mp4")
-        
+
         # Preprocess frames
         data = preprocess_frames(frames, compute_flow=False)
-        
+
         # Check shapes before predict_violence (which adds batch dimension)
         assert frames.shape == (16, 336, 336, 3)  # Updated size
         assert data['rgb'].shape == (3, 16, 336, 336)
-        
+
         # Create mock model and predict
         mock_model = Mock()
         mock_model.parameters.return_value = iter([torch.tensor([1.0])])
         mock_model.return_value = torch.tensor([[0.2, 0.8]])  # Favor violence
-        
+
         is_fight, confidence, inference_time = predict_violence(
             mock_model, data, threshold=0.5, device='cpu'
         )
-        
+
         assert isinstance(is_fight, bool)
         assert 0.0 <= confidence <= 1.0
         assert inference_time >= 0.15  # Should match mocked time difference
-        
+
         # After predict_violence, data will have batch dimension
         assert data['rgb'].shape == (1, 3, 16, 336, 336)
 
@@ -423,27 +426,32 @@ class TestIntegration:
             cv2.CAP_PROP_FRAME_COUNT: 50,
             cv2.CAP_PROP_FPS: 30.0
         }.get(prop, 0)
-        
+
         dummy_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        mock_cap.read.return_value = (True, dummy_frame)
+        def read_side_effect():
+            for _ in range(50):
+                yield (True, dummy_frame)
+            while True:
+                yield (False, None)
+        mock_cap.read.side_effect = read_side_effect()
         mock_cap.set.return_value = None
         mock_cap.release.return_value = None
         mock_video_capture.return_value = mock_cap
-        
+
         # Extract frames
         frames = extract_frames("dummy_video.mp4")
-        
+
         # Test with optical flow computation
         with patch('cv2.calcOpticalFlowFarneback') as mock_flow:
             mock_flow.return_value = np.random.randn(336, 336, 2).astype(np.float32)
-            
+
             data = preprocess_frames(frames, compute_flow=True)
-            
+
             assert 'rgb' in data
             assert 'flow' in data
             assert data['rgb'].shape == (3, 16, 336, 336)
             assert data['flow'].shape == (3, 16, 336, 336)
-            
+
             # Verify optical flow was called for consecutive frame pairs
             assert mock_flow.call_count == 15  # 16 frames = 15 flow computations
 

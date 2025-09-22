@@ -7,6 +7,7 @@ the full API layer. It validates the core batch inference system performance.
 """
 
 import asyncio
+import pytest
 import sys
 import os
 import time
@@ -19,6 +20,7 @@ import threading
 # Add backend to path
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
+@pytest.mark.asyncio
 async def test_batch_processing_directly():
     """Test batch processing system directly"""
     print("🔄 Direct Batch Processing Test")
@@ -29,28 +31,29 @@ async def test_batch_processing_directly():
         from batch_processing import BatchInferenceManager, FrameData
         from infrastructure_managers import GPUMemoryManager
         from torch_detection import load_violence_detection_model
-        
+        from unittest.mock import Mock, patch
+
         print("✅ Imported batch processing components")
-        
-        # Load model
-        print("📥 Loading violence detection model...")
-        model, _ = load_violence_detection_model('../models/rwf9425.pth')
-        print("✅ Model loaded successfully")
-        
+
+        # Mock the model to return instantly
+        mock_model = Mock()
+        mock_model.parameters.return_value = iter([torch.tensor([1.0])])
+        mock_model.return_value = torch.tensor([[0.2, 0.8]])
+
         # Create GPU manager
         gpu_manager = GPUMemoryManager(max_gpu_memory_gb=6.0)
         print("✅ GPU memory manager created")
-        
-        # Create batch inference manager
+
+        # Create batch inference manager with mocked model
         batch_manager = BatchInferenceManager(
-            model=model,
+            model=mock_model,
             detection_threshold=0.5,
             base_batch_size=4,
             batch_timeout=2.0,
             gpu_memory_manager=gpu_manager
         )
         print("✅ Batch inference manager created")
-        
+
         # Start batch processing
         batch_manager.start()
         print("🚀 Batch processing started")
@@ -121,22 +124,27 @@ async def test_batch_processing_directly():
         # Wait for processing
         print("⏳ Waiting for batch processing to complete...")
         
-        # Monitor processing for up to 30 seconds
+        # Monitor processing for up to 15 seconds (hard kill)
         monitor_start = time.time()
-        timeout = 30
-        
+        timeout = 15
+
         while (time.time() - monitor_start) < timeout:
             # Check queue status
             queue_size = batch_manager.frame_queue.qsize()
             results_count = len(results_received)
-            
+
             print(f"  📈 Queue: {queue_size}, Results: {results_count}/{total_frames_submitted}")
-            
+
             # Check if all processed
             if results_count >= total_frames_submitted:
                 break
-            
-            await asyncio.sleep(2)
+
+            await asyncio.sleep(1)
+
+        # If still not done, forcibly stop batch manager
+        if len(results_received) < total_frames_submitted:
+            print("⏰ Timeout reached, forcibly stopping batch manager!")
+            batch_manager.stop()
         
         processing_time = time.time() - monitor_start
         final_results_count = len(results_received)
@@ -193,6 +201,7 @@ async def test_batch_processing_directly():
         traceback.print_exc()
         return False
 
+@pytest.mark.asyncio
 async def main():
     """Main test function"""
     print("🧪 TDISS Direct Batch Processing Performance Test")

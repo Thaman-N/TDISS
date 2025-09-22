@@ -1,3 +1,4 @@
+import pytest
 """
 Quick validation script to test system initialization.
 This script validates that all constructors work correctly before running the full system.
@@ -11,6 +12,7 @@ import traceback
 # Add backend to path
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
+@pytest.mark.asyncio
 async def test_system_initialization():
     """Test basic system initialization"""
     try:

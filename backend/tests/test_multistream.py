@@ -11,11 +11,16 @@ Usage:
 3. Monitor system performance and resource usage
 """
 
-import asyncio
-import aiohttp
-import json
-import time
-from typing import List, Dict
+
+import pytest
+try:
+    import asyncio
+    import aiohttp
+    import json
+    import time
+    from typing import List, Dict
+except ImportError:
+    pytest.skip("aiohttp not installed, skipping multistream tests", allow_module_level=True)
 
 class MultiStreamTester:
     """Test multiple RTSP streams simultaneously"""

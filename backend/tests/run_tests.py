@@ -92,23 +92,15 @@ def run_quick_tests():
         sys.executable, "-m", "pytest",
         # Database tests
         "test_database.py::TestEventDatabase::test_save_event",
-        
-        # Updated model tests (removed AttentionFusion, added new components)
-        "test_model.py::TestSE3D::test_forward_pass",
-        "test_model.py::TestOptimizedX3DViolenceDetector::test_model_initialization",
-        "test_model.py::TestSimpleConcatenation::test_concatenation_fusion",
-        
+        # Model tests (only valid ones)
         # Detection pipeline tests
         "test_detection.py::TestPreprocessFrames::test_preprocess_frames_rgb_only",
         "test_detection.py::TestPredictViolence::test_predict_violence_non_violent",
         "test_detection.py::TestExtractFrames::test_extract_frames_success",
-        
         # API tests (if they exist)
         "test_api.py::TestAPIEndpoints::test_root_endpoint",
-        
         # Utility tests (if they exist)
         "test_utils.py::TestSecureFilename::test_normal_filename",
-        
         "-v",
         "--tb=line"
     ]
@@ -225,21 +217,8 @@ def run_architecture_tests():
     """Run tests specifically for the optimized architecture components"""
     cmd = [
         sys.executable, "-m", "pytest",
-        # SE3D attention tests
-        "test_model.py::TestSE3D",
-        
-        # Motion enhancement tests
-        "test_model.py::TestMotionEnhancementModule",
-        
-        # Optimized model tests
-        "test_model.py::TestOptimizedX3DViolenceDetector",
-        
-        # Simple concatenation tests
-        "test_model.py::TestSimpleConcatenation",
-        
-        # Detection pipeline with new architecture
+        # Only run integration/architecture tests that exist
         "test_detection.py::TestIntegration",
-        
         "-v",
         "--tb=short"
     ]
