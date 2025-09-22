@@ -324,7 +324,19 @@ const LiveStreamDashboard = () => {
       }, 5000)
     }
     
-    // Handle violence detection (individual events)
+    // NEW: Handle immediate violence alerts (lightweight, fast)
+    if (data.type === 'violence_detected_immediate') {
+      toast.warning('Violence Detected!', {
+        description: `${data.stream_name} - Processing analysis...`,
+        duration: 3000,
+        action: {
+          label: 'View Stream',
+          onClick: () => navigate(`/stream-fullscreen/${data.stream_id}`)
+        }
+      })
+    }
+    
+    // Handle full violence detection (complete with media)
     if (data.type === 'violence_detected') {
       const now = Date.now()
       const lastRefresh = localStorage.getItem('lastEventRefresh') || 0
@@ -338,20 +350,26 @@ const LiveStreamDashboard = () => {
       }
       
       const isOngoingIncident = data.is_ongoing_incident || data.incident_status === 'active'
-      const buttonLabel = isOngoingIncident ? 'View Stream' : 'View Event'
+      const buttonLabel = isOngoingIncident ? 'View Stream' : 'View Analysis'
       const buttonAction = () => {
         if (isOngoingIncident) {
           navigate(`/stream-fullscreen/${data.stream_id}`)
         } else {
-          setActiveTab('events')
-          setTimeout(() => {
-            fetchStreamEvents()
-          }, 200)
+          navigate(`/results/stream-event-${data.event_id}`)
         }
       }
       
-      toast.warning('Violence detected!', {
-        description: `Stream: ${data.stream_name}${isOngoingIncident ? ' (Ongoing)' : ''}`,
+      // Enhanced notification with confidence classification
+      const getConfidenceLevel = (confidence) => {
+        if (confidence >= 0.95) return 'CRITICAL'
+        if (confidence >= 0.85) return 'HIGH' 
+        if (confidence >= 0.75) return 'MEDIUM'
+        return 'LOW'
+      }
+      
+      toast.error(`${getConfidenceLevel(data.confidence)} Violence Analysis Complete`, {
+        description: `${data.stream_name}: ${(data.confidence * 100).toFixed(1)}% confidence${isOngoingIncident ? ' (Ongoing)' : ''}`,
+        duration: 8000,
         action: {
           label: buttonLabel,
           onClick: buttonAction
@@ -359,27 +377,30 @@ const LiveStreamDashboard = () => {
       })
     }
     
-    // Handle incident finalization notifications - UPDATED
+    // Handle incident finalization notifications - ENHANCED
     if (data.type === 'incident_finalized') {
+      const avgConf = (data.avg_confidence * 100).toFixed(1)
+      const duration = data.total_duration.toFixed(1)
+      
       toast.success('Security Incident Complete', {
-        description: `${data.stream_name}: ${data.detection_count} detections over ${data.total_duration.toFixed(1)}s`,
+        description: `${data.stream_name}: ${data.detection_count} detections over ${duration}s (${avgConf}% avg)`,
+        duration: 10000,
         action: {
-          label: 'View Analysis',
+          label: 'View Full Analysis',
           onClick: () => {
-            setActiveTab('incidents') // NEW: Switch to incidents tab
-            setTimeout(() => {
-              fetchStitchedIncidents()
-            }, 200)
+            navigate(`/results/incident-${data.incident_id}`)
           }
         }
       })
       
       // Refresh incidents list if viewing
       if (activeTab === 'incidents') {
-        fetchStitchedIncidents()
+        setTimeout(() => {
+          fetchStitchedIncidents()
+        }, 1000)
       }
     }
-  }, [fetchStreamEvents, fetchStitchedIncidents, activeTab])
+  }, [fetchStreamEvents, fetchStitchedIncidents, activeTab, navigate])
 
   const addStream = async () => {
     if (!newStreamName.trim() || !newStreamUrl.trim()) {

@@ -61,6 +61,8 @@ def secure_filename(filename):
 # Import your PyTorch detection module (copy these files to the same directory)
 from torch_detection import load_violence_detection_model, extract_frames, preprocess_frames, predict_violence, extract_consecutive_frame_sequences
 
+main_loop = None
+
 # Event storage classes
 DB_PATH = "violence_events.db"
 MAX_EVENT_CLIP_DURATION = 30  # seconds
@@ -252,7 +254,7 @@ class EventStitchingManager:
                     del self.finalization_timers[stream_id]
     
     def _create_stitched_clip(self, incident: ActiveIncident) -> str:
-        """Create stitched video clip from frame buffer"""
+        """Create stitched video clip from frame buffer - REAL-TIME SPEED"""
         if not incident.frame_buffer:
             return ""
             
@@ -262,21 +264,31 @@ class EventStitchingManager:
             os.makedirs(clip_dir, exist_ok=True)
             clip_path = os.path.join(clip_dir, clip_filename)
             
-            # Create video writer with H.264 codec for web compatibility
+            print(f"Creating real-time stitched clip at: {clip_path}")
+            
             if len(incident.frame_buffer) > 0:
                 height, width = incident.frame_buffer[0].shape[:2]
                 
                 # Use H.264 codec for better web compatibility
-                fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')
                 
-                # Calculate FPS based on actual timing
+                # FIXED: Calculate FPS to match real incident duration
                 total_duration = incident.last_detection_time - incident.start_time
-                fps = len(incident.frame_buffer) / max(total_duration, 1.0)
-                fps = min(max(fps, 2.0), 30.0)  # Clamp between 2-30 fps
+                frame_count = len(incident.frame_buffer)
                 
-                print(f"Creating stitched clip: {len(incident.frame_buffer)} frames, {total_duration:.1f}s, {fps:.1f} fps")
+                # Target: make clip duration approximately match real incident duration
+                target_fps = frame_count / total_duration
                 
-                out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height), isColor=True)
+                # Clamp FPS to reasonable video range (higher minimum for smooth playback)
+                output_fps = min(max(target_fps, 8.0), 30.0)  # 8-30 fps range
+                
+                # Calculate actual output duration
+                output_duration = frame_count / output_fps
+                
+                print(f"Incident: {total_duration:.1f}s real-time, {frame_count} frames")
+                print(f"Output: {output_fps:.1f}fps → {output_duration:.1f}s clip (speed ratio: {output_duration/total_duration:.2f}x)")
+                
+                out = cv2.VideoWriter(clip_path, fourcc, output_fps, (width, height), isColor=True)
                 
                 if out.isOpened():
                     for frame in incident.frame_buffer:
@@ -285,7 +297,10 @@ class EventStitchingManager:
                     
                     # Verify clip was created successfully
                     if os.path.exists(clip_path) and os.path.getsize(clip_path) > 5000:
-                        print(f"Stitched clip created: {clip_path} ({os.path.getsize(clip_path)} bytes)")
+                        file_size = os.path.getsize(clip_path)
+                        print(f"Real-time stitched clip created: {clip_path} ({file_size} bytes)")
+                        print(f"Playback duration: {output_duration:.1f}s (vs {total_duration:.1f}s real incident)")
+                        
                         return f"/api/results/stream_clips/{clip_filename}"
                     else:
                         print(f"Stitched clip too small or failed: {clip_path}")
@@ -293,7 +308,7 @@ class EventStitchingManager:
                             os.remove(clip_path)
                 else:
                     print(f"Could not open video writer for stitched clip")
-                
+            
             return ""
             
         except Exception as e:
@@ -301,6 +316,7 @@ class EventStitchingManager:
             import traceback
             traceback.print_exc()
             return ""
+
     
     def _update_incident_events(self, incident, stitched_clip_path):
         """Update individual events and create stitched incident record - IMPROVED VERSION"""
@@ -1014,44 +1030,48 @@ DISCORD_MENTION_EVERYONE = os.getenv('DISCORD_MENTION_EVERYONE', 'False').lower(
 
 class DiscordNotifier:
     """Discord notification service for violence detection alerts"""
-    
+
     def __init__(self, webhook_url: str = None, enabled: bool = True):
         self.webhook_url = webhook_url or DISCORD_WEBHOOK_URL
         self.enabled = enabled and bool(self.webhook_url)
-        
+
+        # NEW: Track thumbnails sent per stream to avoid spam
+        self.thumbnails_sent = {}  # stream_id -> set of incident_ids
+        self.incident_clips_sent = set()  # Track which incident clips we've sent
+
         if self.enabled:
             print(f"Discord notifications enabled for webhook: {self.webhook_url[:50]}...")
         else:
             print("Discord notifications disabled")
-    
-    def send_violence_alert(self, 
-                           stream_id: int, 
-                           stream_name: str, 
-                           confidence: float, 
-                           timestamp: str,
-                           thumbnail_path: str = None,
-                           clip_path: str = None,
-                           incident_id: str = None,
-                           is_ongoing: bool = False):
-        """Send violence detection alert to Discord"""
-        
+
+    def send_violence_alert(self,
+                            stream_id: int,
+                            stream_name: str,
+                            confidence: float,
+                            timestamp: str,
+                            thumbnail_path: str = None,
+                            clip_path: str = None,
+                            incident_id: str = None,
+                            is_ongoing: bool = False):
+        """Send violence detection alert to Discord - WITH THUMBNAIL CONTROL"""
+
         if not self.enabled:
             return False
-            
+
         try:
             # Determine alert type and color
             if is_ongoing:
-                alert_type = "🚨 ONGOING INCIDENT"
+                alert_type = "ONGOING INCIDENT"
                 color = 0xFF6B6B  # Red
                 description = f"Violence continues to be detected in {stream_name}"
             else:
-                alert_type = "⚠️ VIOLENCE DETECTED"
+                alert_type = "VIOLENCE DETECTED"
                 color = 0xFF9500  # Orange
                 description = f"New violence detected in {stream_name}"
-            
+
             # Build embed
             embed = {
-                "title": alert_type,
+                "title": f"🚨 {alert_type}",
                 "description": description,
                 "color": color,
                 "timestamp": datetime.now().isoformat(),
@@ -1073,11 +1093,10 @@ class DiscordNotifier:
                     }
                 ],
                 "footer": {
-                    "text": "Violence Detection System",
-                    "icon_url": "https://cdn.discordapp.com/emojis/1234567890123456789.png"  # Optional
+                    "text": "Violence Detection System"
                 }
             }
-            
+
             # Add incident info if available
             if incident_id:
                 embed["fields"].append({
@@ -1085,169 +1104,117 @@ class DiscordNotifier:
                     "value": f"`{incident_id}`",
                     "inline": False
                 })
-            
+
             # Build message content
             content = ""
             if DISCORD_MENTION_EVERYONE:
                 content = "@everyone "
-            
+
             content += f"Security Alert: Violence detected in **{stream_name}**"
-            
+
             # Prepare payload
             payload = {
                 "content": content,
                 "embeds": [embed]
             }
-            
+
             # Send main notification
             response = requests.post(
                 self.webhook_url,
                 json=payload,
                 timeout=10
             )
-            
+
             if response.status_code in [200, 204]:
                 print(f"Discord alert sent successfully for stream {stream_id}")
-                
-                # Send thumbnail if available
-                if thumbnail_path and self._send_thumbnail(stream_id, stream_name, thumbnail_path):
-                    print(f"Discord thumbnail sent for stream {stream_id}")
-                
+
+                # NEW: Send thumbnail ONLY for first detection in an incident
+                should_send_thumbnail = self._should_send_thumbnail(stream_id, incident_id, is_ongoing)
+
+                if should_send_thumbnail and thumbnail_path:
+                    if self._send_thumbnail(stream_id, stream_name, thumbnail_path):
+                        print(f"Discord thumbnail sent for stream {stream_id} (first detection)")
+                        # Mark thumbnail as sent for this incident
+                        self._mark_thumbnail_sent(stream_id, incident_id)
+
                 return True
             else:
                 print(f"Discord webhook failed: {response.status_code} - {response.text}")
                 return False
-                
+
         except Exception as e:
             print(f"Error sending Discord notification: {e}")
             return False
-    
+
+    def _should_send_thumbnail(self, stream_id: int, incident_id: str, is_ongoing: bool) -> bool:
+        """Determine if we should send a thumbnail for this detection"""
+        if not incident_id:
+            return True  # Send for non-incident detections
+
+        # Initialize tracking for this stream if needed
+        if stream_id not in self.thumbnails_sent:
+            self.thumbnails_sent[stream_id] = set()
+
+        # For new incidents, always send thumbnail
+        if incident_id not in self.thumbnails_sent[stream_id]:
+            return True
+
+        # For ongoing incidents, don't send more thumbnails
+        return False
+
+    def _mark_thumbnail_sent(self, stream_id: int, incident_id: str):
+        """Mark that we've sent a thumbnail for this incident"""
+        if incident_id and stream_id in self.thumbnails_sent:
+            self.thumbnails_sent[stream_id].add(incident_id)
+
     def _send_thumbnail(self, stream_id: int, stream_name: str, thumbnail_path: str) -> bool:
-        """Send thumbnail image as follow-up message"""
+        """Send thumbnail image as a follow-up message"""
         try:
             # Convert URL path to file path
             if thumbnail_path.startswith('/api/results/'):
                 file_path = os.path.join(RESULTS_FOLDER, thumbnail_path.replace('/api/results/', ''))
             else:
                 file_path = thumbnail_path
-            
+
             if not os.path.exists(file_path):
                 print(f"Thumbnail file not found: {file_path}")
                 return False
-            
+
             # Read and send image
             with open(file_path, 'rb') as f:
                 files = {
                     'file': (f'detection_{stream_id}.jpg', f, 'image/jpeg')
                 }
-                
+
                 payload = {
                     'content': f'📸 Detection snapshot from **{stream_name}**'
                 }
-                
+
                 response = requests.post(
                     self.webhook_url,
                     data=payload,
                     files=files,
                     timeout=15
                 )
-                
+
                 return response.status_code in [200, 204]
-                
+
         except Exception as e:
             print(f"Error sending Discord thumbnail: {e}")
             return False
-    
-    def _send_batch_thumbnail(self, job_id: str, filename: str, thumbnail_path: str) -> bool:
-        """Send thumbnail image for batch upload video"""
-        try:
-            # Convert URL path to file path
-            if thumbnail_path.startswith('/api/results/'):
-                file_path = os.path.join(RESULTS_FOLDER, thumbnail_path.replace('/api/results/', ''))
-            else:
-                file_path = thumbnail_path
-            
-            if not os.path.exists(file_path):
-                print(f"Batch thumbnail file not found: {file_path}")
-                return False
-            
-            # Read and send image
-            with open(file_path, 'rb') as f:
-                files = {
-                    'file': (f'batch_{job_id}.jpg', f, 'image/jpeg')
-                }
-                
-                payload = {
-                    'content': f'📸 Thumbnail from **{filename}**'
-                }
-                
-                response = requests.post(
-                    self.webhook_url,
-                    data=payload,
-                    files=files,
-                    timeout=15
-                )
-                
-                return response.status_code in [200, 204]
-                
-        except Exception as e:
-            print(f"Error sending Discord batch thumbnail: {e}")
-            return False
-    
-    def _send_batch_clip(self, job_id: str, filename: str, clip_path: str) -> bool:
-        """Send video clip for batch upload video"""
-        try:
-            # Convert URL path to file path
-            if clip_path.startswith('/api/results/'):
-                file_path = os.path.join(RESULTS_FOLDER, clip_path.replace('/api/results/', ''))
-            else:
-                file_path = clip_path
-            
-            if not os.path.exists(file_path):
-                print(f"Batch clip file not found: {file_path}")
-                return False
-            
-            # Check file size (Discord has 25MB limit for free accounts)
-            file_size = os.path.getsize(file_path)
-            if file_size > 25 * 1024 * 1024:  # 25MB
-                print(f"Batch clip too large for Discord: {file_size / (1024*1024):.1f}MB")
-                return False
-            
-            # Read and send video
-            with open(file_path, 'rb') as f:
-                files = {
-                    'file': (f'batch_{job_id}.mp4', f, 'video/mp4')
-                }
-                
-                payload = {
-                    'content': f'🎥 Violence clip from **{filename}**'
-                }
-                
-                response = requests.post(
-                    self.webhook_url,
-                    data=payload,
-                    files=files,
-                    timeout=30  # Longer timeout for video uploads
-                )
-                
-                return response.status_code in [200, 204]
-                
-        except Exception as e:
-            print(f"Error sending Discord batch clip: {e}")
-            return False
-    
-    def send_incident_summary(self, 
-                             incident_id: str,
-                             stream_name: str, 
-                             duration: float, 
-                             detection_count: int, 
-                             avg_confidence: float,
-                             clip_url: str = None):
-        """Send incident summary when incident is finalized"""
-        
+
+    def send_incident_summary(self,
+                              incident_id: str,
+                              stream_name: str,
+                              duration: float,
+                              detection_count: int,
+                              avg_confidence: float,
+                              clip_url: str = None):
+        """Send incident summary when an incident is finalized - WITH ACTUAL CLIP"""
+
         if not self.enabled:
             return False
-            
+
         try:
             embed = {
                 "title": "📋 INCIDENT SUMMARY",
@@ -1281,30 +1248,255 @@ class DiscordNotifier:
                 }
             }
             
-            if clip_url:
-                embed["fields"].append({
-                    "name": "Video Clip",
-                    "value": f"[View Incident Recording]({clip_url})",
-                    "inline": False
-                })
-            
             payload = {
                 "content": f"✅ Incident **{incident_id}** has been processed and archived.",
                 "embeds": [embed]
             }
-            
+
             response = requests.post(
                 self.webhook_url,
                 json=payload,
                 timeout=10
             )
-            
-            return response.status_code in [200, 204]
-            
+
+            if response.status_code in [200, 204]:
+                print(f"Discord incident summary sent for {incident_id}")
+
+                # NEW: Send the actual video file if available and not already sent
+                if clip_url and incident_id not in self.incident_clips_sent:
+                    if self._send_incident_clip_file(incident_id, stream_name, clip_url):
+                        print(f"Discord incident clip sent for {incident_id}")
+                        self.incident_clips_sent.add(incident_id)
+
+                return True
+            else:
+                print(f"Discord incident summary webhook failed: {response.status_code}")
+                return False
+
         except Exception as e:
             print(f"Error sending Discord incident summary: {e}")
             return False
-    
+
+    def _send_incident_clip_file(self, incident_id: str, stream_name: str, clip_url: str) -> bool:
+        """Send incident video file to Discord - FIXED PATH CONVERSION"""
+        try:
+            # Convert URL to file path - HANDLE FULL URLs
+            if clip_url.startswith('http://') or clip_url.startswith('https://'):
+                # Extract the path part from full URL
+                # http://localhost:8000/api/results/stream_clips/file.mp4 -> /api/results/stream_clips/file.mp4
+                from urllib.parse import urlparse
+                parsed_url = urlparse(clip_url)
+                url_path = parsed_url.path  # This gives us "/api/results/stream_clips/file.mp4"
+                
+                if url_path.startswith('/api/results/'):
+                    # Remove /api/results/ prefix and join with RESULTS_FOLDER
+                    relative_path = url_path.replace('/api/results/', '')
+                    file_path = os.path.join(RESULTS_FOLDER, relative_path)
+                else:
+                    print(f"Unexpected URL path format: {url_path}")
+                    return False
+                    
+            elif clip_url.startswith('/api/results/'):
+                # Handle relative URL paths
+                file_path = os.path.join(RESULTS_FOLDER, clip_url.replace('/api/results/', ''))
+            else:
+                # Assume it's already a file path
+                file_path = clip_url
+            
+            print(f"Discord clip lookup: {clip_url} -> {file_path}")
+            
+            if not os.path.exists(file_path):
+                print(f"Incident clip file not found: {file_path}")
+                
+                # Try to find the file by pattern matching (fallback)
+                clips_dir = os.path.join(RESULTS_FOLDER, "stream_clips")
+                if os.path.exists(clips_dir):
+                    # Look for files matching the incident ID pattern
+                    import glob
+                    pattern = os.path.join(clips_dir, f"*{incident_id}*.mp4")
+                    matching_files = glob.glob(pattern)
+                    
+                    if matching_files:
+                        file_path = matching_files[0]  # Use first match
+                        print(f"Found clip via pattern matching: {file_path}")
+                    else:
+                        print(f"No matching clip files found for incident {incident_id}")
+                        
+                        # Send a message explaining no clip is available
+                        payload = {
+                            'content': f'🎥 Incident clip for **{stream_name}** (ID: `{incident_id}`) was not found on disk.\n' +
+                                    f'The incident summary has been recorded, but video clip is missing.'
+                        }
+                        
+                        requests.post(self.webhook_url, json=payload, timeout=10)
+                        return False
+                else:
+                    print(f"Stream clips directory not found: {clips_dir}")
+                    return False
+            
+            # Check original file size
+            original_size = os.path.getsize(file_path)
+            max_size = 25 * 1024 * 1024  # 25MB limit
+            
+            final_file_path = file_path
+            
+            # If file is too large, compress it
+            if original_size > max_size:
+                print(f"Incident clip too large ({original_size / (1024*1024):.1f}MB), compressing...")
+                
+                compressed_path = self._compress_video_for_discord(file_path, max_size)
+                
+                if compressed_path and os.path.exists(compressed_path):
+                    final_file_path = compressed_path
+                    compressed_size = os.path.getsize(compressed_path)
+                    print(f"Compressed from {original_size / (1024*1024):.1f}MB to {compressed_size / (1024*1024):.1f}MB")
+                else:
+                    # Compression failed, send explanation message
+                    payload = {
+                        'content': f'🎥 Incident clip for **{stream_name}** is too large for Discord ({original_size / (1024*1024):.1f}MB > 25MB)\n' +
+                                f'Compression failed. Clip saved locally: `{os.path.basename(file_path)}`'
+                    }
+                    
+                    requests.post(self.webhook_url, json=payload, timeout=10)
+                    return False
+            
+            # Send the file (original or compressed)
+            try:
+                with open(final_file_path, 'rb') as f:
+                    files = {
+                        'file': (f'incident_{incident_id}.mp4', f, 'video/mp4')
+                    }
+                    
+                    # Add compression info to message if file was compressed
+                    content = f'🎥 Full incident recording from **{stream_name}** (ID: `{incident_id}`)'
+                    if final_file_path != file_path:
+                        content += f'\n📉 Compressed from {original_size / (1024*1024):.1f}MB to fit Discord limits'
+                    
+                    payload = {
+                        'content': content
+                    }
+                    
+                    print(f"Uploading incident clip to Discord: {os.path.basename(final_file_path)} ({os.path.getsize(final_file_path) / (1024*1024):.1f}MB)")
+                    
+                    response = requests.post(
+                        self.webhook_url,
+                        data=payload,
+                        files=files,
+                        timeout=60  # Longer timeout for video uploads
+                    )
+                    
+                    # Clean up compressed file if it was created
+                    if final_file_path != file_path:
+                        try:
+                            os.remove(final_file_path)
+                            print(f"Cleaned up temporary compressed file: {final_file_path}")
+                        except:
+                            pass
+                    
+                    if response.status_code in [200, 204]:
+                        print(f"Successfully sent incident clip to Discord for {incident_id}")
+                        return True
+                    else:
+                        print(f"Discord upload failed: {response.status_code} - {response.text}")
+                        return False
+                    
+            except Exception as e:
+                print(f"Error uploading video file to Discord: {e}")
+                return False
+                
+        except Exception as e:
+            print(f"Error sending Discord incident clip: {e}")
+            return False
+
+    # Also add this helper method for better debugging
+    def _debug_file_paths(self, clip_url: str, stream_clips_dir: str = None):
+        """Debug helper to show file path resolution"""
+        if not stream_clips_dir:
+            stream_clips_dir = os.path.join(RESULTS_FOLDER, "stream_clips")
+        
+        print(f"=== DEBUG: File Path Resolution ===")
+        print(f"Input clip_url: {clip_url}")
+        print(f"Stream clips directory: {stream_clips_dir}")
+        print(f"Directory exists: {os.path.exists(stream_clips_dir)}")
+        
+        if os.path.exists(stream_clips_dir):
+            print(f"Files in directory:")
+            try:
+                for file in os.listdir(stream_clips_dir):
+                    file_path = os.path.join(stream_clips_dir, file)
+                    file_size = os.path.getsize(file_path) / (1024*1024)
+                    print(f"  - {file} ({file_size:.1f}MB)")
+            except Exception as e:
+                print(f"  Error listing files: {e}")
+        
+        print("=== END DEBUG ===")
+
+    def _compress_video_for_discord(self, input_path: str, max_size_bytes: int) -> Optional[str]:
+        """Compress video to fit under Discord's size limit"""
+        try:
+            # Create temporary output file
+            temp_dir = tempfile.gettempdir()
+            temp_filename = f"discord_compressed_{int(time.time())}.mp4"
+            output_path = os.path.join(temp_dir, temp_filename)
+            
+            # Use FFmpeg command for more reliable compression
+            # This is generally more effective and robust than manipulating frames with OpenCV
+            # It requires FFmpeg to be installed and in the system's PATH.
+            # We use a two-pass encoding to better target the final file size.
+            
+            # Get video duration using OpenCV
+            cap = cv2.VideoCapture(input_path)
+            if not cap.isOpened():
+                print(f"Cannot open video for compression: {input_path}")
+                return None
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration_sec = frame_count / fps if fps > 0 else 0
+            cap.release()
+            
+            if duration_sec <= 0:
+                print("Could not determine video duration. Cannot compress.")
+                return None
+            
+            # Target bitrate in bits per second (leaving a 5% buffer)
+            target_bitrate_bps = int((max_size_bytes * 8 / duration_sec) * 0.95)
+            
+            # FFmpeg command
+            # -y: overwrite output file
+            # -i: input file
+            # -c:v libx264: use H.264 codec
+            # -b:v: target video bitrate
+            # -pass 1/2: two-pass encoding
+            # -an: no audio
+            # -f mp4: output format
+            command_pass1 = f'ffmpeg -y -i "{input_path}" -c:v libx264 -b:v {target_bitrate_bps} -pass 1 -an -f mp4 /dev/null'
+            command_pass2 = f'ffmpeg -y -i "{input_path}" -c:v libx264 -b:v {target_bitrate_bps} -pass 2 -c:a aac -b:a 128k "{output_path}"'
+            
+            # On Windows, the null output is 'NUL'
+            if os.name == 'nt':
+                command_pass1 = f'ffmpeg -y -i "{input_path}" -c:v libx264 -b:v {target_bitrate_bps} -pass 1 -an -f mp4 NUL'
+
+            print(f"Running FFmpeg pass 1...")
+            os.system(command_pass1)
+            
+            print(f"Running FFmpeg pass 2...")
+            os.system(command_pass2)
+
+            # Check if compression was successful and within limits
+            if os.path.exists(output_path) and os.path.getsize(output_path) <= max_size_bytes:
+                 print(f"FFmpeg compression successful.")
+                 return output_path
+            else:
+                 if os.path.exists(output_path):
+                    os.remove(output_path)
+                 print("FFmpeg compression failed or output file is still too large.")
+                 return None
+
+        except Exception as e:
+            print(f"Error during video compression with FFmpeg: {e}")
+            return None
+
+
     def send_batch_upload_start(self, batch_id: str, video_count: int, video_names: List[str]):
         """Send notification when multiple videos are uploaded for batch processing"""
         
@@ -1316,7 +1508,7 @@ class DiscordNotifier:
             display_videos = video_names[:5]
             more_count = len(video_names) - 5
             
-            video_list = "• " + "\n• ".join(display_videos)
+            video_list = "• " + "\n• ".join(f"`{name}`" for name in display_videos)
             if more_count > 0:
                 video_list += f"\n• ... and {more_count} more videos"
             
@@ -1352,11 +1544,7 @@ class DiscordNotifier:
                 }
             }
             
-            content = ""
-            if DISCORD_MENTION_EVERYONE:
-                content = "@everyone "
-            
-            content += f"📋 **Batch Upload**: {video_count} videos queued for analysis"
+            content = f"📋 **Batch Upload**: {video_count} videos queued for analysis"
             
             payload = {
                 "content": content,
@@ -1379,12 +1567,12 @@ class DiscordNotifier:
         except Exception as e:
             print(f"Error sending Discord batch start notification: {e}")
             return False
-    
+
     def send_batch_video_complete(self, batch_id: str, video_name: str, completed_count: int, 
-                                 total_count: int, has_violence: bool, confidence: float = None,
-                                 job_id: str = None, thumbnail_path: str = None, 
-                                 clip_paths: List[str] = None):
-        """Send notification when an individual video in batch completes - WITH MEDIA"""
+                                  total_count: int, has_violence: bool, confidence: float = None,
+                                  job_id: str = None, thumbnail_path: str = None, 
+                                  clip_paths: List[str] = None):
+        """Send notification when an individual video in a batch completes - REDUCED THUMBNAILS"""
         
         if not self.enabled:
             return False
@@ -1437,6 +1625,7 @@ class DiscordNotifier:
             
             # Add view link if job_id provided
             if job_id:
+                # Assuming a local dashboard URL structure
                 embed["fields"].append({
                     "name": "View Results",
                     "value": f"[Open Dashboard](http://localhost:8000/dashboard?job={job_id})",
@@ -1455,15 +1644,17 @@ class DiscordNotifier:
             if response.status_code in [200, 204]:
                 print(f"Discord batch video complete notification sent for {video_name}")
                 
-                # Send thumbnail if available
-                if thumbnail_path and self._send_batch_thumbnail(job_id, video_name, thumbnail_path):
-                    print(f"Discord batch thumbnail sent for {video_name}")
+                # NEW: Only send thumbnail for HIGH confidence violent videos (>90%)
+                if has_violence and thumbnail_path and confidence and confidence > 0.90:
+                    if self._send_batch_thumbnail(job_id, video_name, thumbnail_path):
+                        print(f"Discord batch thumbnail sent for high-confidence detection: {video_name}")
                 
-                # Send violence clips if available (only for violent videos)
-                if has_violence and clip_paths:
-                    for clip_path in clip_paths[:2]:  # Limit to 2 clips to avoid spam
-                        if self._send_batch_clip(job_id, video_name, clip_path):
-                            print(f"Discord batch clip sent for {video_name}")
+                # NEW: Only send clips for VERY HIGH confidence (>95%) and limit to 1
+                if has_violence and clip_paths and confidence and confidence > 0.95:
+                    # Send only the first clip
+                    first_clip = clip_paths[0] if clip_paths else None
+                    if first_clip and self._send_batch_clip(job_id, video_name, first_clip):
+                        print(f"Discord batch clip sent for very high confidence: {video_name}")
                 
                 return True
             else:
@@ -1473,10 +1664,10 @@ class DiscordNotifier:
         except Exception as e:
             print(f"Error sending Discord batch video complete notification: {e}")
             return False
-    
+
     def send_batch_complete_summary(self, batch_id: str, total_videos: int, violence_count: int, 
-                                   processing_time: float, video_results: List[Dict]):
-        """Send final summary when entire batch is complete - WITH SAMPLE MEDIA"""
+                                    processing_time: float, video_results: List[Dict]):
+        """Send final summary when an entire batch is complete - SMART THUMBNAIL SELECTION"""
         
         if not self.enabled:
             return False
@@ -1536,9 +1727,9 @@ class DiscordNotifier:
             if len(video_results) <= 8:
                 results_text = ""
                 for result in video_results:
-                    status_icon = "🚨" if result['has_violence'] else "✅"
-                    conf_text = f" ({result['confidence']:.1%})" if result['has_violence'] else ""
-                    results_text += f"{status_icon} `{result['filename']}`{conf_text}\n"
+                    status_icon = "🚨" if result.get('has_violence') else "✅"
+                    conf_text = f" ({result.get('confidence', 0):.1%})" if result.get('has_violence') else ""
+                    results_text += f"{status_icon} `{result.get('filename', 'N/A')}`{conf_text}\n"
                 
                 embed["fields"].append({
                     "name": "📋 Detailed Results",
@@ -1547,9 +1738,10 @@ class DiscordNotifier:
                 })
             
             # Add multi-analysis dashboard link
-            job_ids = [r.get('job_id', '') for r in video_results if r.get('job_id')]
+            job_ids = [r.get('job_id') for r in video_results if r.get('job_id')]
             if job_ids:
                 jobs_param = ','.join(job_ids)
+                # Assuming local dashboard URL
                 embed["fields"].append({
                     "name": "📊 View All Results",
                     "value": f"[Open Multi-Analysis Dashboard](http://localhost:8000/multi-analysis?jobs={jobs_param})",
@@ -1580,38 +1772,24 @@ class DiscordNotifier:
             if response.status_code in [200, 204]:
                 print(f"Discord batch summary sent for {total_videos} videos")
                 
-                # Send sample thumbnails/clips from violent videos (limit to avoid spam)
+                # NEW: SMART thumbnail selection - only send 1 thumbnail from the HIGHEST confidence detection
                 violent_results = [r for r in video_results if r.get('has_violence', False)]
                 
                 if violent_results:
-                    # Send up to 2 sample thumbnails from highest confidence detections
+                    # Sort by confidence and get the highest one
                     violent_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+                    best_result = violent_results[0]
                     
-                    for i, result in enumerate(violent_results[:2]):
-                        job_id = result.get('job_id')
-                        filename = result.get('filename', 'unknown')
-                        
-                        if job_id:
-                            # Try to send thumbnail and one clip from this high-confidence detection
-                            try:
-                                # Look for thumbnail in results folder
-                                thumbnail_path = os.path.join(RESULTS_FOLDER, f"{job_id}_thumbnail.jpg")
-                                if os.path.exists(thumbnail_path):
-                                    if self._send_batch_thumbnail(job_id, f"Sample #{i+1}: {filename}", f"/api/results/{job_id}_thumbnail.jpg"):
-                                        print(f"Sent sample thumbnail #{i+1} for batch summary")
-                                
-                                # Look for clips in clips folder
-                                clips_folder = os.path.join(RESULTS_FOLDER, "clips")
-                                if os.path.exists(clips_folder):
-                                    for clip_file in os.listdir(clips_folder):
-                                        if clip_file.startswith(job_id):
-                                            clip_path = f"/api/results/clips/{clip_file}"
-                                            if self._send_batch_clip(job_id, f"Sample clip: {filename}", clip_path):
-                                                print(f"Sent sample clip for batch summary: {filename}")
-                                                break  # Only send one clip per video
-                                            
-                            except Exception as e:
-                                print(f"Error sending sample media for batch summary: {e}")
+                    job_id = best_result.get('job_id')
+                    filename = best_result.get('filename', 'unknown')
+                    confidence = best_result.get('confidence', 0)
+                    
+                    if job_id and confidence > 0.85:  # Only for high confidence
+                        # Try to send thumbnail from the best detection
+                        thumbnail_path = os.path.join(RESULTS_FOLDER, f"{job_id}_thumbnail.jpg")
+                        if os.path.exists(thumbnail_path):
+                            if self._send_batch_thumbnail(job_id, f"Best Detection ({confidence:.1%}): {filename}", f"/api/results/{job_id}_thumbnail.jpg"):
+                                print(f"Sent single best thumbnail for batch summary: {filename}")
                 
                 return True
             else:
@@ -1621,7 +1799,103 @@ class DiscordNotifier:
         except Exception as e:
             print(f"Error sending Discord batch summary: {e}")
             return False
-    
+
+    def _send_batch_thumbnail(self, job_id: str, filename: str, thumbnail_path: str) -> bool:
+        """Send thumbnail image for a batch upload video"""
+        try:
+            if thumbnail_path.startswith('/api/results/'):
+                file_path = os.path.join(RESULTS_FOLDER, thumbnail_path.replace('/api/results/', ''))
+            else:
+                file_path = thumbnail_path
+            
+            if not os.path.exists(file_path):
+                print(f"Batch thumbnail file not found: {file_path}")
+                return False
+            
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (f'batch_{job_id}.jpg', f, 'image/jpeg')
+                }
+                
+                payload = {
+                    'content': f'📸 {filename}'
+                }
+                
+                response = requests.post(
+                    self.webhook_url,
+                    data=payload,
+                    files=files,
+                    timeout=15
+                )
+                
+                return response.status_code in [200, 204]
+                
+        except Exception as e:
+            print(f"Error sending Discord batch thumbnail: {e}")
+            return False
+
+    def _send_batch_clip(self, job_id: str, filename: str, clip_path: str) -> bool:
+        """Send video clip for a batch upload video - WITH COMPRESSION"""
+        try:
+            if clip_path.startswith('/api/results/'):
+                file_path = os.path.join(RESULTS_FOLDER, clip_path.replace('/api/results/', ''))
+            else:
+                file_path = clip_path
+            
+            if not os.path.exists(file_path):
+                print(f"Batch clip file not found: {file_path}")
+                return False
+            
+            # Check file size and compress if needed
+            original_size = os.path.getsize(file_path)
+            max_size = 25 * 1024 * 1024  # 25MB
+            
+            final_file_path = file_path
+            
+            if original_size > max_size:
+                print(f"Batch clip too large ({original_size / (1024*1024):.1f}MB), compressing...")
+                
+                compressed_path = self._compress_video_for_discord(file_path, max_size)
+                
+                if compressed_path and os.path.exists(compressed_path):
+                    final_file_path = compressed_path
+                    compressed_size = os.path.getsize(compressed_path)
+                    print(f"Batch clip compressed from {original_size / (1024*1024):.1f}MB to {compressed_size / (1024*1024):.1f}MB")
+                else:
+                    print(f"Batch clip compression failed, skipping Discord upload")
+                    return False
+            
+            with open(final_file_path, 'rb') as f:
+                files = {
+                    'file': (f'batch_{job_id}.mp4', f, 'video/mp4')
+                }
+                
+                content = f'🎥 Violence clip from **{filename}**'
+                if final_file_path != file_path:
+                    content += f' (compressed to fit Discord)'
+                
+                payload = {'content': content}
+                
+                response = requests.post(
+                    self.webhook_url,
+                    data=payload,
+                    files=files,
+                    timeout=30
+                )
+                
+                # Clean up compressed file
+                if final_file_path != file_path:
+                    try:
+                        os.remove(final_file_path)
+                    except OSError:
+                        pass
+                
+                return response.status_code in [200, 204]
+                
+        except Exception as e:
+            print(f"Error sending Discord batch clip: {e}")
+            return False
+
     def send_system_status(self, message: str, status_type: str = "info"):
         """Send system status messages"""
         
@@ -1630,10 +1904,10 @@ class DiscordNotifier:
             
         try:
             color_map = {
-                "info": 0x2196F3,     # Blue
-                "warning": 0xFF9800,  # Orange  
-                "error": 0xF44336,    # Red
-                "success": 0x4CAF50   # Green
+                "info": 0x2196F3,    # Blue
+                "warning": 0xFF9800, # Orange  
+                "error": 0xF44336,   # Red
+                "success": 0x4CAF50  # Green
             }
             
             emoji_map = {
@@ -1666,7 +1940,7 @@ class DiscordNotifier:
         except Exception as e:
             print(f"Error sending Discord status message: {e}")
             return False
-
+            
 def create_batch_id() -> str:
     """Generate unique batch ID"""
     return f"batch_{int(time.time())}_{str(uuid.uuid4())[:8]}"
@@ -1864,7 +2138,7 @@ def cleanup_all_streams():
     
     print("Cleaning up all active streams...")
     
-    # First finalize any orphaned incidents
+    # Finalize any orphaned incidents
     if stitching_manager:
         try:
             streams_with_incidents = list(stitching_manager.active_incidents.keys())
@@ -1883,12 +2157,19 @@ def cleanup_all_streams():
         except Exception as e:
             print(f"Error stopping stream {stream_id}: {e}")
 
-    # Fix: Remove timeout parameter for older Python versions
+    # Shutdown background executor
+    try:
+        background_executor.shutdown(wait=True)
+        print("Background executor shutdown completed")
+    except Exception as e:
+        print(f"Error during background executor shutdown: {e}")
+
+    # Shutdown main executor
     try:
         executor.shutdown(wait=True)
-        print("Executor shutdown completed")
+        print("Main executor shutdown completed")
     except Exception as e:
-        print(f"Error during executor shutdown: {e}")
+        print(f"Error during main executor shutdown: {e}")
     
     # Update database status for all streams
     if stream_db:
@@ -1997,6 +2278,15 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 atexit.register(cleanup_on_exit)
 
+# Add this to your main.py imports at the top
+from concurrent.futures import ThreadPoolExecutor
+import queue
+import threading
+from collections import deque
+
+# Add this global executor for background tasks (add after other globals)
+background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="background_task")
+
 class RTSPStreamProcessor:
     def __init__(self, stream_id: int, rtsp_url: str, stream_name: str):
         self.stream_id = stream_id
@@ -2010,59 +2300,141 @@ class RTSPStreamProcessor:
         self.process_thread = None
 
         # Frame buffers and processing
-        self.raw_frame_queue = queue.Queue(maxsize=30)  # Raw frames from RTSP
-        self.rgb_frame_buffer = deque(maxlen=16)  # RGB frames for model (224x224x3 uint8)
-        self.display_frame_buffer = deque(maxlen=50)  # Rolling buffer for incident clips (display quality)
-        self.last_display_frame = None  # Last frame for display/thumbnail
+        self.raw_frame_queue = queue.Queue(maxsize=30)
+        self.rgb_frame_buffer = deque(maxlen=16)
+        self.display_frame_buffer = deque(maxlen=50)
+        self.last_display_frame = None
 
         # Timing and rate control
         self.last_detection_time = 0
-        self.detection_interval = 3.0  # Process every 3 seconds for stability
-        self.target_fps = 8  # Target FPS for model processing (not display)
+        self.detection_interval = 3.0
+        self.target_fps = 8
         self.frame_skip_counter = 0
 
-        # Model input requirements (from torch_detection.py)
-        self.model_input_size = (336, 336)  # INPUT_SIZE = 336
-        self.model_temporal_length = 16  # NUM_FRAMES = 16
+        # Model input requirements
+        self.model_input_size = (336, 336)
+        self.model_temporal_length = 16
 
         # Thread synchronization
         self._lock = threading.Lock()
+        
+        # NEW: Background task queue for heavy operations
+        self.detection_queue = queue.Queue(maxsize=10)
 
-    def validate_rtsp_url(self, url: str) -> bool:
-        """Validate RTSP URL format"""
+    def _run_detection(self):
+        """Run violence detection - OPTIMIZED to avoid blocking"""
+        if model is None or len(self.rgb_frame_buffer) < self.model_temporal_length:
+            return
+
         try:
-            parsed = urlparse(url)
-            return parsed.scheme.lower() in ['rtsp', 'rtmp', 'http', 'https'] and parsed.netloc
-        except:
-            return False
+            # Extract frames and run detection (keep this fast)
+            frames_list = list(self.rgb_frame_buffer)[-self.model_temporal_length:]
+            frames_array = np.array(frames_list, dtype=np.uint8)
 
-    def preprocess_frame_for_buffer(self, frame: np.ndarray) -> np.ndarray:
-        """
-        Preprocess a single frame to match extract_frames() output format
-        This creates RGB uint8 frames in [224, 224, 3] format - exactly like extract_frames()
-        """
-        try:
-            # Step 1: Resize to model input size (like extract_frames does)
-            frame_resized = cv2.resize(frame, self.model_input_size, interpolation=cv2.INTER_LINEAR)
+            # DEBUG: Check temporal diversity
+            frame_differences = []
+            for i in range(len(frames_array) - 1):
+                diff = np.mean(np.abs(frames_array[i].astype(np.float32) - frames_array[i+1].astype(np.float32)))
+                frame_differences.append(diff)
 
-            # Step 2: Convert BGR to RGB (like extract_frames does)
-            if len(frame_resized.shape) == 3 and frame_resized.shape[2] == 3:
-                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+            avg_frame_diff = np.mean(frame_differences) if frame_differences else 0
+            print(f"Stream {self.stream_id}: Avg frame difference: {avg_frame_diff:.2f}")
+
+            if avg_frame_diff < 1.0:
+                print(f"WARNING: Stream {self.stream_id} has very low frame diversity")
+
+            print(f"Stream {self.stream_id}: Detection input shape: {frames_array.shape}")
+
+            # Ensure model is in eval mode
+            model.eval()
+
+            # Check if model uses motion enhancement
+            use_motion = hasattr(model, 'use_motion_enhancement') and model.use_motion_enhancement
+            print(f"Stream {self.stream_id}: Using motion enhancement: {use_motion}")
+
+            # Run preprocessing and prediction (this is the heavy part but unavoidable)
+            processed_data = preprocess_frames(frames_array, compute_flow=use_motion)
+
+            for key, tensor in processed_data.items():
+                print(f"Stream {self.stream_id}: {key} tensor - shape: {tensor.shape}, dtype: {tensor.dtype}, range: [{tensor.min():.3f}, {tensor.max():.3f}]")
+
+            # Run prediction
+            is_violent, confidence, inference_time = predict_violence(
+                model, processed_data, DETECTION_THRESHOLD, debug=True
+            )
+
+            print(f"Stream {self.stream_id}: Final result - Violence: {is_violent}, Confidence: {confidence:.3f}, Time: {inference_time:.3f}s")
+
+            # CRITICAL CHANGE: If violence detected, queue the heavy processing instead of doing it inline
+            if is_violent and confidence > DETECTION_THRESHOLD:
+                print(f"ALERT: Violence detected in stream {self.stream_id}: {confidence:.3f}")
+                
+                if confidence >= 0.99:
+                    print(f"NOTE: High confidence detection ({confidence:.3f}) for stream {self.stream_id}")
+                
+                # NEW: Queue the heavy event processing instead of doing it synchronously
+                current_time = time.time()
+                
+                # Get snapshot of current frame and buffer state (quick)
+                recent_frames = []
+                current_frame = None
+                with self._lock:
+                    if self.display_frame_buffer:
+                        recent_frames = list(self.display_frame_buffer)[-30:]
+                    if self.last_display_frame is not None:
+                        current_frame = self.last_display_frame.copy()
+                
+                # Submit to background queue (non-blocking)
+                try:
+                    detection_data = {
+                        'stream_id': self.stream_id,
+                        'stream_name': self.stream_name,
+                        'confidence': confidence,
+                        'timestamp': current_time,
+                        'current_frame': current_frame,
+                        'recent_frames': recent_frames,
+                        'rtsp_url': self.rtsp_url
+                    }
+                    
+                    self.detection_queue.put_nowait(detection_data)
+                    print(f"Stream {self.stream_id}: Queued detection event for background processing")
+                    
+                    # Send immediate lightweight WebSocket notification
+                    self._send_immediate_alert(confidence, current_time)
+                    
+                except queue.Full:
+                    print(f"WARNING: Detection queue full for stream {self.stream_id}, dropping event")
             else:
-                frame_rgb = frame_resized.copy()
-
-            # Step 3: Ensure uint8 type (like extract_frames output)
-            if frame_rgb.dtype != np.uint8:
-                frame_rgb = frame_rgb.astype(np.uint8)
-
-            return frame_rgb  # Shape: [224, 224, 3], dtype: uint8, format: RGB
+                print(f"Stream {self.stream_id}: No violence detected (confidence: {confidence:.3f})")
 
         except Exception as e:
-            print(f"Error preprocessing frame for stream {self.stream_id}: {e}")
-            return None
+            print(f"Error running detection on stream {self.stream_id}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _send_immediate_alert(self, confidence: float, timestamp: float):
+        """Send immediate lightweight alert - no heavy processing"""
+        try:
+            if main_loop and main_loop.is_running():
+                payload = {
+                    'type': 'violence_detected_immediate',
+                    'stream_id': self.stream_id,
+                    'stream_name': self.stream_name,
+                    'confidence': confidence,
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'is_processing': True  # Indicate full processing is happening in background
+                }
+                
+                asyncio.run_coroutine_threadsafe(
+                    manager.send_job_update(f"violence_immediate_{self.stream_id}_{int(timestamp)}", payload),
+                    main_loop
+                )
+                print(f"Stream {self.stream_id}: Sent immediate alert via WebSocket")
+        except Exception as e:
+            print(f"Error sending immediate alert for stream {self.stream_id}: {e}")
 
     def start_stream(self):
-        """Start the RTSP stream with proper error handling"""
+        """Start the RTSP stream with background processing"""
         if not self.validate_rtsp_url(self.rtsp_url):
             print(f"Invalid RTSP URL: {self.rtsp_url}")
             return False
@@ -2070,23 +2442,18 @@ class RTSPStreamProcessor:
         try:
             # Initialize capture with proper settings
             self.cap = cv2.VideoCapture(self.rtsp_url)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-            # Critical settings for RTSP stability
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer to reduce latency
-
-            # Try to set timeout properties (not all OpenCV versions support these)
             try:
-                self.cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10 second open timeout
-                self.cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)   # 5 second read timeout
+                self.cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
+                self.cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
             except:
-                pass  # Ignore if not supported
+                pass
 
-            # Test connection
             if not self.cap.isOpened():
                 print(f"Failed to open RTSP stream: {self.rtsp_url}")
                 return False
 
-            # Test frame reading
             ret, test_frame = self.cap.read()
             if not ret or test_frame is None:
                 print(f"Failed to read test frame from stream: {self.rtsp_url}")
@@ -2095,7 +2462,6 @@ class RTSPStreamProcessor:
 
             print(f"Stream {self.stream_id} frame size: {test_frame.shape}")
 
-            # Start processing
             self.is_running = True
             active_streams[self.stream_id] = {
                 'processor': self,
@@ -2107,9 +2473,13 @@ class RTSPStreamProcessor:
             # Start threads
             self.capture_thread = threading.Thread(target=self._capture_frames, daemon=True)
             self.process_thread = threading.Thread(target=self._process_frames, daemon=True)
+            
+            # NEW: Start background detection processing thread
+            self.background_thread = threading.Thread(target=self._background_detection_processor, daemon=True)
 
             self.capture_thread.start()
             self.process_thread.start()
+            self.background_thread.start()
 
             print(f"Successfully started stream {self.stream_id}: {self.stream_name}")
             return True
@@ -2120,10 +2490,256 @@ class RTSPStreamProcessor:
                 self.cap.release()
             return False
 
+    def _background_detection_processor(self):
+        """NEW: Background thread to handle heavy detection processing"""
+        print(f"Background detection processor started for stream {self.stream_id}")
+        
+        while self.is_running:
+            try:
+                # Wait for detection events (blocking, but in separate thread)
+                detection_data = self.detection_queue.get(timeout=1.0)
+                
+                if detection_data is None:  # Shutdown signal
+                    break
+                
+                print(f"Stream {self.stream_id}: Processing detection event in background...")
+                
+                # Now do all the heavy processing without blocking the main detection loop
+                self._process_detection_event_heavy(detection_data)
+                
+                # Mark task as done
+                self.detection_queue.task_done()
+                
+            except queue.Empty:
+                continue  # Timeout is normal, keep checking
+            except Exception as e:
+                print(f"Error in background detection processor for stream {self.stream_id}: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        print(f"Background detection processor stopped for stream {self.stream_id}")
+
+    def _process_detection_event_heavy(self, detection_data):
+        """Process the heavy parts of detection event (thumbnails, clips, database, notifications)"""
+        try:
+            stream_id = detection_data['stream_id']
+            stream_name = detection_data['stream_name']
+            confidence = detection_data['confidence']
+            current_time = detection_data['timestamp']
+            current_frame = detection_data['current_frame']
+            recent_frames = detection_data['recent_frames']
+            rtsp_url = detection_data['rtsp_url']
+            
+            timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_time))
+            
+            print(f"Stream {stream_id}: Starting heavy processing for detection at {timestamp_str}")
+            
+            # Check if this should be stitched to existing incident
+            should_stitch = stitching_manager.should_stitch_to_existing(stream_id, current_time)
+            
+            # Generate thumbnail (heavy I/O operation)
+            thumbnail_url = self._generate_thumbnail_background(stream_id, current_time, current_frame)
+            
+            # Generate clip (very heavy operation) 
+            clip_url = self._generate_clip_background(stream_id, current_time, current_frame)
+            
+            # Handle event stitching logic
+            incident_id = ""
+            incident_status = "active"
+            
+            if should_stitch:
+                incident = stitching_manager.active_incidents.get(stream_id)
+                if incident:
+                    incident_id = incident.incident_id
+                print(f"Extending incident {incident_id} for stream {stream_id}")
+            
+            # Create event record
+            event = ViolenceEvent(
+                timestamp=timestamp_str,
+                source_type='stream',
+                source_id=str(stream_id),
+                filename=stream_name,
+                start_time=current_time,
+                end_time=current_time + self.detection_interval,
+                duration=self.detection_interval,
+                confidence=confidence,
+                thumbnail_path=thumbnail_url,
+                clip_path=clip_url,
+                incident_status=incident_status,
+                incident_id=incident_id,
+                metadata=json.dumps({
+                    'stream_name': stream_name,
+                    'rtsp_url': rtsp_url,
+                    'detection_type': 'live_stream',
+                    'buffer_size': len(self.rgb_frame_buffer),
+                    'model_input_size': self.model_input_size,
+                    'temporal_length': self.model_temporal_length,
+                    'pipeline_version': 'stitched_stream_v3_background',
+                    'frame_timestamp': current_time,
+                    'detection_interval': self.detection_interval
+                })
+            )
+
+            # Save to database (I/O operation)
+            event_id = event_db.save_event(event)
+            stream_db.increment_detection_count(stream_id)
+
+            # Handle incident stitching
+            if should_stitch:
+                stitching_manager.extend_incident(stream_id, current_time, confidence, recent_frames, event_id)
+            else:
+                incident_id = stitching_manager.start_new_incident(
+                    stream_id, stream_name, current_time, confidence, recent_frames, event_id
+                )
+                # Update event with incident_id
+                conn = sqlite3.connect(event_db.db_path)
+                cursor = conn.cursor()
+                cursor.execute('UPDATE violence_events SET incident_id = ? WHERE id = ?', (incident_id, event_id))
+                conn.commit()
+                conn.close()
+
+            print(f"Stream {stream_id}: Completed heavy processing for event {event_id}")
+
+            # Send final notifications (network I/O operations)
+            self._send_final_notifications_background(event_id, stream_id, stream_name, confidence, 
+                                                    timestamp_str, thumbnail_url, clip_url, 
+                                                    incident_id, incident_status, should_stitch)
+
+        except Exception as e:
+            print(f"Error in heavy detection processing for stream {detection_data.get('stream_id', 'unknown')}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _generate_thumbnail_background(self, stream_id, timestamp, frame):
+        """Generate thumbnail in background (heavy I/O)"""
+        try:
+            if frame is None:
+                return ""
+                
+            thumbnail_filename = f"stream_{stream_id}_event_{int(timestamp)}.jpg"
+            thumbnail_dir = os.path.join(RESULTS_FOLDER, "stream_thumbnails")
+            os.makedirs(thumbnail_dir, exist_ok=True)
+            thumbnail_path = os.path.join(thumbnail_dir, thumbnail_filename)
+            
+            # Resize and save thumbnail
+            height, width = frame.shape[:2]
+            max_dim = 400
+            if height > width:
+                new_height = max_dim
+                new_width = int(width * (max_dim / height))
+            else:
+                new_width = max_dim
+                new_height = int(height * (max_dim / width))
+            
+            thumbnail = cv2.resize(frame, (new_width, new_height))
+            cv2.imwrite(thumbnail_path, thumbnail, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            
+            return f"/api/results/stream_thumbnails/{thumbnail_filename}"
+            
+        except Exception as e:
+            print(f"Error generating thumbnail for stream {stream_id}: {e}")
+            return ""
+
+    def _generate_clip_background(self, stream_id, timestamp, frame):
+        """Generate video clip in background (very heavy operation)"""
+        try:
+            if frame is None:
+                return ""
+                
+            clip_filename = f"stream_{stream_id}_clip_{int(timestamp)}.mp4"
+            clips_dir = os.path.join(RESULTS_FOLDER, "stream_clips")
+            os.makedirs(clips_dir, exist_ok=True)
+            clip_path = os.path.join(clips_dir, clip_filename)
+            
+            # Create clip frames
+            target_width, target_height = 640, 480
+            resized_frame = cv2.resize(frame, (target_width, target_height))
+            
+            # Create 16 frames (4 seconds at 4 FPS)
+            clip_frames = [resized_frame.copy() for _ in range(16)]
+            
+            if len(clip_frames) >= 8:
+                # Try H.264 encoding
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                out = cv2.VideoWriter(clip_path, fourcc, 4.0, (target_width, target_height), isColor=True)
+                
+                if out.isOpened():
+                    for frame in clip_frames:
+                        out.write(frame)
+                    out.release()
+                    
+                    # Verify file
+                    if os.path.exists(clip_path) and os.path.getsize(clip_path) > 2000:
+                        test_cap = cv2.VideoCapture(clip_path)
+                        if test_cap.isOpened():
+                            ret, test_frame = test_cap.read()
+                            test_cap.release()
+                            
+                            if ret and test_frame is not None:
+                                return f"/api/results/stream_clips/{clip_filename}"
+                            else:
+                                os.remove(clip_path)
+                        else:
+                            os.remove(clip_path)
+                    else:
+                        if os.path.exists(clip_path):
+                            os.remove(clip_path)
+                else:
+                    out.release()
+            
+            return ""
+            
+        except Exception as e:
+            print(f"Error generating clip for stream {stream_id}: {e}")
+            return ""
+
+    def _send_final_notifications_background(self, event_id, stream_id, stream_name, confidence, 
+                                           timestamp_str, thumbnail_url, clip_url, incident_id, 
+                                           incident_status, should_stitch):
+        """Send final notifications in background (network I/O)"""
+        try:
+            # Send complete WebSocket notification
+            if main_loop and main_loop.is_running():
+                payload = {
+                    'type': 'violence_detected',
+                    'event_id': event_id,
+                    'stream_id': stream_id,
+                    'stream_name': stream_name,
+                    'confidence': confidence,
+                    'thumbnail': thumbnail_url,
+                    'clip': clip_url,
+                    'timestamp': timestamp_str,
+                    'incident_id': incident_id,
+                    'incident_status': incident_status,
+                    'is_ongoing_incident': should_stitch
+                }
+                
+                asyncio.run_coroutine_threadsafe(
+                    manager.send_job_update(f"violence_event_{event_id}", payload),
+                    main_loop
+                )
+                print(f"Stream {stream_id}: Sent complete event notification via WebSocket")
+
+            # Send Discord notification
+            if discord_notifier and discord_notifier.enabled:
+                discord_notifier.send_violence_alert(
+                    stream_id=stream_id,
+                    stream_name=stream_name,
+                    confidence=confidence,
+                    timestamp=timestamp_str,
+                    thumbnail_path=thumbnail_url,
+                    clip_path=clip_url,
+                    incident_id=incident_id,
+                    is_ongoing=should_stitch
+                )
+                print(f"Stream {stream_id}: Sent Discord notification")
+
+        except Exception as e:
+            print(f"Error sending final notifications for stream {stream_id}: {e}")
+
     def stop_stream(self):
         """Stop the RTSP stream and cleanup resources"""
         if not self.is_running:
-            print(f"Stream {self.stream_id} already stopped")
             return
             
         print(f"Stopping stream {self.stream_id}")
@@ -2136,7 +2752,13 @@ class RTSPStreamProcessor:
             except Exception as e:
                 print(f"Error cleaning up incidents for stream {self.stream_id}: {e}")
 
-        # Clean up capture first
+        # Signal background thread to stop
+        try:
+            self.detection_queue.put_nowait(None)  # Shutdown signal
+        except:
+            pass
+
+        # Clean up capture
         if self.cap:
             try:
                 self.cap.release()
@@ -2144,63 +2766,45 @@ class RTSPStreamProcessor:
             except Exception as e:
                 print(f"Error releasing capture for stream {self.stream_id}: {e}")
 
-        # Set threads to None to avoid joining in signal handlers
-        threads_to_join = []
-        capture_alive = False
-        process_alive = False
-        
-        if self.capture_thread and self.capture_thread.is_alive():
-            capture_alive = True
-            threads_to_join.append(("capture", self.capture_thread))
-        
-        if self.process_thread and self.process_thread.is_alive():
-            process_alive = True
-            threads_to_join.append(("process", self.process_thread))
-        
-        # IMPORTANT: Don't join threads if we're in a global shutdown
+        # Don't join threads during global shutdown
         if not global_shutdown_event.is_set() and not shutdown_in_progress:
+            threads_to_join = []
+            
+            if hasattr(self, 'capture_thread') and self.capture_thread and self.capture_thread.is_alive():
+                threads_to_join.append(("capture", self.capture_thread))
+            
+            if hasattr(self, 'process_thread') and self.process_thread and self.process_thread.is_alive():
+                threads_to_join.append(("process", self.process_thread))
+            
+            if hasattr(self, 'background_thread') and self.background_thread and self.background_thread.is_alive():
+                threads_to_join.append(("background", self.background_thread))
+            
             for thread_name, thread in threads_to_join:
                 try:
-                    # Use a shorter timeout to avoid blocking
                     thread.join(timeout=1.0)
                     if thread.is_alive():
                         print(f"Warning: {thread_name} thread for stream {self.stream_id} did not stop gracefully")
                 except Exception as e:
                     print(f"Error joining {thread_name} thread for stream {self.stream_id}: {e}")
-        else:
-            print(f"Skipping thread join for stream {self.stream_id} during shutdown")
 
-        # Only report on thread status if we're not in shutdown
-        if not global_shutdown_event.is_set() and not shutdown_in_progress:
-            if capture_alive and self.capture_thread and self.capture_thread.is_alive():
-                print(f"Note: Capture thread for stream {self.stream_id} still running")
-            if process_alive and self.process_thread and self.process_thread.is_alive():
-                print(f"Note: Process thread for stream {self.stream_id} still running")
-
-        # Clear buffers safely - don't block
+        # Clear buffers safely
         try:
-            # Clear raw frame queue without blocking
-            try:
-                while not self.raw_frame_queue.empty():
-                    try:
-                        self.raw_frame_queue.get_nowait()
-                    except:
-                        break
-            except:
-                pass
+            while not self.raw_frame_queue.empty():
+                try:
+                    self.raw_frame_queue.get_nowait()
+                except:
+                    break
             
-            # Clear RGB buffer
-            try:
-                self.rgb_frame_buffer.clear()
-            except:
-                pass
+            while not self.detection_queue.empty():
+                try:
+                    self.detection_queue.get_nowait()
+                except:
+                    break
             
-            # Clear display frame
-            try:
-                with self._lock:
-                    self.last_display_frame = None
-            except:
-                pass
+            self.rgb_frame_buffer.clear()
+            
+            with self._lock:
+                self.last_display_frame = None
                 
         except Exception as e:
             print(f"Error clearing buffers for stream {self.stream_id}: {e}")
@@ -2212,22 +2816,41 @@ class RTSPStreamProcessor:
         except Exception as e:
             print(f"Error removing stream {self.stream_id} from active streams: {e}")
 
-        # Ensure we're not setting threads to None during shutdown
-        if not global_shutdown_event.is_set() and not shutdown_in_progress:
-            self.capture_thread = None
-            self.process_thread = None
-
         print(f"Stream {self.stream_id} stopped successfully")
 
+    # Keep all other existing methods unchanged...
+    def validate_rtsp_url(self, url: str) -> bool:
+        """Validate RTSP URL format"""
+        try:
+            parsed = urlparse(url)
+            return parsed.scheme.lower() in ['rtsp', 'rtmp', 'http', 'https'] and parsed.netloc
+        except:
+            return False
+
+    def preprocess_frame_for_buffer(self, frame: np.ndarray) -> np.ndarray:
+        """Preprocess a single frame to match extract_frames() output format"""
+        try:
+            frame_resized = cv2.resize(frame, self.model_input_size, interpolation=cv2.INTER_LINEAR)
+
+            if len(frame_resized.shape) == 3 and frame_resized.shape[2] == 3:
+                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+            else:
+                frame_rgb = frame_resized.copy()
+
+            if frame_rgb.dtype != np.uint8:
+                frame_rgb = frame_rgb.astype(np.uint8)
+
+            return frame_rgb
+
+        except Exception as e:
+            print(f"Error preprocessing frame for stream {self.stream_id}: {e}")
+            return None
+
     def _capture_frames(self):
-        """
-        Dedicated thread for capturing frames from RTSP stream
-        This runs at the stream's native frame rate
-        """
+        """Dedicated thread for capturing frames from RTSP stream"""
         consecutive_failures = 0
         max_failures = 10
 
-        # In _capture_frames
         while self.is_running and not global_shutdown_event.is_set() and self.cap and self.cap.isOpened():
             try:
                 ret, frame = self.cap.read()
@@ -2240,62 +2863,51 @@ class RTSPStreamProcessor:
                         print(f"Stream {self.stream_id}: Too many consecutive failures, stopping")
                         break
 
-                    time.sleep(0.1)  # Brief pause before retry
+                    time.sleep(0.1)
                     continue
 
-                # Reset failure counter on successful read
                 consecutive_failures = 0
 
-                # Store raw frame for display/thumbnail (keep BGR format)
                 with self._lock:
                     self.last_display_frame = frame.copy()
-                    # Also add to rolling buffer for incident clips
                     self.display_frame_buffer.append(frame.copy())
 
-                # Add to processing queue (non-blocking)
                 try:
                     self.raw_frame_queue.put(frame, block=False)
                 except queue.Full:
-                    # Drop oldest frame if queue is full (maintain real-time processing)
                     try:
                         self.raw_frame_queue.get_nowait()
                         self.raw_frame_queue.put(frame, block=False)
                     except:
-                        pass  # Continue if we can't manage the queue
+                        pass
 
-                # Control capture rate to prevent overwhelming the processing
-                time.sleep(0.033)  # ~30 FPS capture rate
+                time.sleep(0.033)
 
             except Exception as e:
                 print(f"Error in capture thread for stream {self.stream_id}: {e}")
                 consecutive_failures += 1
                 if consecutive_failures >= max_failures:
                     break
-                time.sleep(0.5)  # Longer pause on errors
+                time.sleep(0.5)
 
         print(f"Capture thread for stream {self.stream_id} ended")
 
     def _process_frames(self):
-        """
-        Dedicated thread for processing frames for ML model
-        This runs at controlled rate and maintains temporal buffer in the EXACT format expected by the model
-        """
+        """Dedicated thread for processing frames for ML model"""
         last_process_time = 0
-        process_interval = 1.0 / self.target_fps  # Target processing interval
+        process_interval = 1.0 / self.target_fps
         frame_counter = 0
         last_buffer_add_time = 0
-        buffer_interval = 0.2  # Add to buffer every 200ms for temporal diversity
+        buffer_interval = 0.2
 
         while self.is_running:
             try:
                 current_time = time.time()
 
-                # Rate control for processing
                 if current_time - last_process_time < process_interval:
                     time.sleep(0.01)
                     continue
 
-                # Get frame from capture queue
                 try:
                     raw_frame = self.raw_frame_queue.get(timeout=1.0)
                 except queue.Empty:
@@ -2304,26 +2916,21 @@ class RTSPStreamProcessor:
                 frame_counter += 1
                 last_process_time = current_time
 
-                # Only add to buffer periodically to ensure temporal diversity
                 if current_time - last_buffer_add_time >= buffer_interval:
-                    # Preprocess frame to match extract_frames() output format
                     rgb_frame = self.preprocess_frame_for_buffer(raw_frame)
                     if rgb_frame is not None:
                         self.rgb_frame_buffer.append(rgb_frame)
                         last_buffer_add_time = current_time
                         print(f"Stream {self.stream_id}: Added frame to buffer (size: {len(self.rgb_frame_buffer)}/16)")
 
-                # Generate thumbnail periodically (every 60 processed frames)
                 if frame_counter % 60 == 0:
                     self._save_thumbnail()
 
-                # Run detection if we have enough frames and enough time has passed
                 if (len(self.rgb_frame_buffer) >= self.model_temporal_length and
                     current_time - self.last_detection_time >= self.detection_interval):
                     self._run_detection()
                     self.last_detection_time = current_time
 
-                # Send frame update via WebSocket (every 15 processed frames)
                 if frame_counter % 15 == 0:
                     try:
                         loop = asyncio.new_event_loop()
@@ -2341,326 +2948,6 @@ class RTSPStreamProcessor:
 
         print(f"Process thread for stream {self.stream_id} ended")
 
-    def _run_detection(self):
-        """
-        Run violence detection using the EXACT same pipeline as torch_detection.py
-        CRITICAL: This now matches extract_frames() → preprocess_frames() → predict_violence() flow
-        """
-        if model is None or len(self.rgb_frame_buffer) < self.model_temporal_length:
-            return
-
-        try:
-            # Extract exactly 16 frames from buffer (same as extract_frames output)
-            frames_list = list(self.rgb_frame_buffer)[-self.model_temporal_length:]
-
-            # Convert to numpy array with shape [T, H, W, C] - exactly like extract_frames()
-            # This should be [16, 224, 224, 3] RGB uint8
-            frames_array = np.array(frames_list, dtype=np.uint8)
-
-            # DEBUG: Check temporal diversity (are we seeing the same frame 16 times?)
-            frame_differences = []
-            for i in range(len(frames_array) - 1):
-                diff = np.mean(np.abs(frames_array[i].astype(np.float32) - frames_array[i+1].astype(np.float32)))
-                frame_differences.append(diff)
-
-            avg_frame_diff = np.mean(frame_differences) if frame_differences else 0
-            print(f"Stream {self.stream_id}: Avg frame difference: {avg_frame_diff:.2f} (should be > 0 for movement)")
-
-            # DEBUG: Check if all frames are identical (bad temporal buffer)
-            if avg_frame_diff < 1.0:
-                print(f"WARNING: Stream {self.stream_id} has very low frame diversity - might be seeing same frame repeatedly")
-
-            print(f"Stream {self.stream_id}: Detection input shape: {frames_array.shape}, dtype: {frames_array.dtype}")
-
-            # Ensure model is in eval mode (CRITICAL)
-            model.eval()
-
-            # Check if model uses motion enhancement (from model architecture)
-            use_motion = hasattr(model, 'use_motion_enhancement') and model.use_motion_enhancement
-            print(f"Stream {self.stream_id}: Using motion enhancement: {use_motion}")
-
-            # Use the EXACT same preprocessing pipeline as torch_detection.py
-            processed_data = preprocess_frames(frames_array, compute_flow=use_motion)
-
-            # DEBUG: Check preprocessed data shapes and ranges
-            for key, tensor in processed_data.items():
-                print(f"Stream {self.stream_id}: {key} tensor - shape: {tensor.shape}, dtype: {tensor.dtype}, range: [{tensor.min():.3f}, {tensor.max():.3f}]")
-
-            # Run prediction using the exact same function WITH DEBUG
-            is_violent, confidence, inference_time = predict_violence(
-                model, processed_data, DETECTION_THRESHOLD, debug=True  # Enable debug!
-            )
-
-            print(f"Stream {self.stream_id}: Final result - Violence: {is_violent}, Confidence: {confidence:.3f}, Time: {inference_time:.3f}s")
-
-            # Only save if confidence is reasonable (not 1.000 every time)
-            if is_violent and confidence > DETECTION_THRESHOLD and confidence < 0.99:
-                print(f"ALERT: Violence detected in stream {self.stream_id}: {confidence:.3f}")
-                self._save_detection_event(confidence)
-            elif is_violent and confidence >= 0.99:
-                print(f"SUSPICIOUS: Stream {self.stream_id} showing max confidence {confidence:.3f} - possible model issue")
-            else:
-                print(f"Stream {self.stream_id}: No violence detected (confidence: {confidence:.3f})")
-
-        except Exception as e:
-            print(f"Error running detection on stream {self.stream_id}: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def _save_detection_event(self, confidence: float):
-        """Save violence detection event with stitching support"""
-        try:
-            current_time = time.time()
-            timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Get recent frames for stitching (include lead-up to violence)
-            recent_frames = []
-            with self._lock:
-                if self.display_frame_buffer:
-                    # Get last 30 frames (about 10 seconds at 3fps) for context
-                    recent_frames = list(self.display_frame_buffer)[-30:]
-            
-            # Check if this should be stitched to existing incident
-            should_stitch = stitching_manager.should_stitch_to_existing(self.stream_id, current_time)
-            
-            # Generate thumbnail from current frame
-            thumbnail_filename = f"stream_{self.stream_id}_event_{int(current_time)}.jpg"
-            thumbnail_dir = os.path.join(RESULTS_FOLDER, "stream_thumbnails")
-            os.makedirs(thumbnail_dir, exist_ok=True)
-            thumbnail_path = os.path.join(thumbnail_dir, thumbnail_filename)
-            thumbnail_url = f"/api/results/stream_thumbnails/{thumbnail_filename}"
-            
-            # Save thumbnail
-            try:
-                with self._lock:
-                    if self.last_display_frame is not None:
-                        frame = self.last_display_frame.copy()
-                        # Resize for thumbnail
-                        height, width = frame.shape[:2]
-                        max_dim = 400
-                        if height > width:
-                            new_height = max_dim
-                            new_width = int(width * (max_dim / height))
-                        else:
-                            new_width = max_dim
-                            new_height = int(height * (max_dim / width))
-                        
-                        thumbnail = cv2.resize(frame, (new_width, new_height))
-                        cv2.imwrite(thumbnail_path, thumbnail, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            except Exception as e:
-                print(f"Error saving thumbnail for stream {self.stream_id}: {e}")
-                thumbnail_url = ""
-
-            # Generate a short clip with proper H.264 encoding
-            clip_url = ""
-            try:
-                clip_filename = f"stream_{self.stream_id}_clip_{int(current_time)}.mp4"
-                clips_dir = os.path.join(RESULTS_FOLDER, "stream_clips")
-                os.makedirs(clips_dir, exist_ok=True)
-                clip_path = os.path.join(clips_dir, clip_filename)
-                
-                clip_frames = []
-                with self._lock:
-                    if self.last_display_frame is not None:
-                        display_frame = self.last_display_frame.copy()
-                        
-                        # Standard web resolution (divisible by 16 for better compression)
-                        target_width, target_height = 640, 480
-                        resized_frame = cv2.resize(display_frame, (target_width, target_height))
-                        
-                        # Create 16 frames (4 seconds at 4 FPS) - optimal for web
-                        for _ in range(16):
-                            clip_frames.append(resized_frame.copy())
-                
-                if clip_frames and len(clip_frames) >= 8:
-                    success = False
-                    
-                    # Try H.264 first (most compatible)
-                    try:
-                        # Use libx264 compatible fourcc
-                        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264
-                        out = cv2.VideoWriter(
-                            clip_path, 
-                            fourcc, 
-                            4.0,  # 4 FPS
-                            (target_width, target_height),
-                            isColor=True
-                        )
-                        
-                        if out.isOpened():
-                            for frame in clip_frames:
-                                # Ensure frame is in BGR format (OpenCV default)
-                                if len(frame.shape) == 3 and frame.shape[2] == 3:
-                                    out.write(frame)
-                            out.release()
-                            
-                            # Verify file creation and reasonable size
-                            if os.path.exists(clip_path) and os.path.getsize(clip_path) > 2000:  # At least 2KB
-                                # Try to verify it's a valid MP4 by opening it
-                                test_cap = cv2.VideoCapture(clip_path)
-                                if test_cap.isOpened():
-                                    ret, test_frame = test_cap.read()
-                                    test_cap.release()
-                                    
-                                    if ret and test_frame is not None:
-                                        clip_url = f"/api/results/stream_clips/{clip_filename}"
-                                        print(f"Generated H.264 clip for stream {self.stream_id}: {clip_url} ({os.path.getsize(clip_path)} bytes)")
-                                        success = True
-                                    else:
-                                        print(f"Generated clip not readable for stream {self.stream_id}")
-                                        os.remove(clip_path)
-                                else:
-                                    print(f"Generated clip not openable for stream {self.stream_id}")
-                                    os.remove(clip_path)
-                            else:
-                                print(f"Clip file too small for stream {self.stream_id}")
-                                if os.path.exists(clip_path):
-                                    os.remove(clip_path)
-                        else:
-                            print(f"Failed to open H.264 VideoWriter for stream {self.stream_id}")
-                            out.release()
-                            
-                    except Exception as h264_error:
-                        print(f"H.264 encoding failed for stream {self.stream_id}: {h264_error}")
-                    
-                    # Fallback: Try MJPEG (Motion JPEG) - very compatible
-                    if not success:
-                        try:
-                            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-                            out = cv2.VideoWriter(clip_path, fourcc, 4.0, (target_width, target_height))
-                            
-                            if out.isOpened():
-                                for frame in clip_frames:
-                                    out.write(frame)
-                                out.release()
-                                
-                                if os.path.exists(clip_path) and os.path.getsize(clip_path) > 2000:
-                                    clip_url = f"/api/results/stream_clips/{clip_filename}"
-                                    print(f"Generated MJPEG clip for stream {self.stream_id}: {clip_url}")
-                                    success = True
-                                else:
-                                    if os.path.exists(clip_path):
-                                        os.remove(clip_path)
-                            else:
-                                out.release()
-                                
-                        except Exception as mjpeg_error:
-                            print(f"MJPEG encoding failed for stream {self.stream_id}: {mjpeg_error}")
-                    
-                    if not success:
-                        print(f"All codec attempts failed for stream {self.stream_id}")
-                        
-            except Exception as e:
-                print(f"Clip generation error for stream {self.stream_id}: {e}")
-                import traceback
-                traceback.print_exc()
-
-            # Handle event stitching logic
-            incident_id = ""
-            incident_status = "active"  # Default for new detections
-            
-            if should_stitch:
-                # Extend existing incident with recent frames
-                incident = stitching_manager.active_incidents.get(self.stream_id)
-                if incident:
-                    incident_id = incident.incident_id
-                print(f"Extending incident {incident_id} for stream {self.stream_id}")
-            else:
-                # Start new incident - will get incident_id after event creation
-                pass
-
-            # Create event record (temporary clip for immediate notification)
-            event = ViolenceEvent(
-                timestamp=timestamp_str,
-                source_type='stream',
-                source_id=str(self.stream_id),
-                filename=self.stream_name,
-                start_time=current_time,  # Use actual timestamp for timeline
-                end_time=current_time + self.detection_interval,
-                duration=self.detection_interval,
-                confidence=confidence,
-                thumbnail_path=thumbnail_url,
-                clip_path=clip_url,  # Temporary clip for immediate viewing
-                incident_status=incident_status,
-                incident_id=incident_id,
-                metadata=json.dumps({
-                    'stream_name': self.stream_name,
-                    'rtsp_url': self.rtsp_url,
-                    'detection_type': 'live_stream',
-                    'buffer_size': len(self.rgb_frame_buffer),
-                    'model_input_size': self.model_input_size,
-                    'temporal_length': self.model_temporal_length,
-                    'pipeline_version': 'stitched_stream_v3',
-                    'frame_timestamp': current_time,
-                    'detection_interval': self.detection_interval
-                })
-            )
-
-            # Save to database
-            event_id = event_db.save_event(event)
-            stream_db.increment_detection_count(self.stream_id)
-
-            # Handle incident stitching
-            if should_stitch:
-                # Update the event_id in the existing incident
-                stitching_manager.extend_incident(self.stream_id, current_time, confidence, recent_frames, event_id)
-            else:
-                # Start new incident with recent frames
-                incident_id = stitching_manager.start_new_incident(
-                    self.stream_id, self.stream_name, current_time, confidence, recent_frames, event_id
-                )
-                # Update event with incident_id
-                conn = sqlite3.connect(event_db.db_path)
-                cursor = conn.cursor()
-                cursor.execute('UPDATE violence_events SET incident_id = ? WHERE id = ?', (incident_id, event_id))
-                conn.commit()
-                conn.close()
-
-            print(f"Saved detection event {event_id} for stream {self.stream_id}, incident: {incident_id}")
-
-            # Send immediate WebSocket notification (for real-time alerts)
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                # Send violence detection notification with incident info
-                loop.run_until_complete(manager.send_job_update(f"violence_event_{event_id}", {
-                    'type': 'violence_detected',
-                    'event_id': event_id,
-                    'stream_id': self.stream_id,
-                    'stream_name': self.stream_name,
-                    'confidence': confidence,
-                    'thumbnail': thumbnail_url,
-                    'clip': clip_url,  # Temporary clip
-                    'timestamp': timestamp_str,
-                    'incident_id': incident_id,
-                    'incident_status': incident_status,
-                    'is_ongoing_incident': should_stitch
-                }))
-                
-                # ADD THIS DISCORD NOTIFICATION BLOCK
-                # Send Discord notification
-                if discord_notifier and discord_notifier.enabled:
-                    discord_notifier.send_violence_alert(
-                        stream_id=self.stream_id,
-                        stream_name=self.stream_name,
-                        confidence=confidence,
-                        timestamp=timestamp_str,
-                        thumbnail_path=thumbnail_url,
-                        clip_path=clip_url,
-                        incident_id=incident_id,
-                        is_ongoing=should_stitch
-                    )
-                
-                loop.close()
-            except Exception as e:
-                print(f"Error sending violence detection WebSocket update: {e}")
-
-        except Exception as e:
-            print(f"Error saving detection event for stream {self.stream_id}: {e}")
-            import traceback
-            traceback.print_exc()    
-    
     def _save_thumbnail(self):
         """Save current frame as thumbnail"""
         try:
@@ -2674,7 +2961,6 @@ class RTSPStreamProcessor:
 
             thumbnail_path = os.path.join(thumbnail_dir, f"stream_{self.stream_id}_thumb.jpg")
 
-            # Resize for thumbnail (maintain aspect ratio)
             height, width = frame.shape[:2]
             max_dim = 300
             if height > width:
@@ -2687,7 +2973,6 @@ class RTSPStreamProcessor:
             thumbnail = cv2.resize(frame, (new_width, new_height))
             cv2.imwrite(thumbnail_path, thumbnail, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
-            # Update database
             thumbnail_url = f"/api/results/stream_thumbnails/stream_{self.stream_id}_thumb.jpg"
             stream_db.update_stream_status(self.stream_id, 'active', thumbnail_url)
 
@@ -2702,7 +2987,6 @@ class RTSPStreamProcessor:
                     return None
                 frame = self.last_display_frame.copy()
 
-            # Encode as JPEG
             _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             return base64.b64encode(buffer).decode('utf-8')
 
@@ -2794,8 +3078,12 @@ async def cleanup_uploaded_file(file_path: str, delay_hours: int = FILE_CLEANUP_
 
 @app.on_event("startup")
 async def startup_event():
-    global model, event_db, stream_db, stitching_manager, discord_notifier
+    global model, event_db, stream_db, stitching_manager, discord_notifier, main_loop
     try:
+        # Capture the running event loop
+        main_loop = asyncio.get_running_loop()
+        print("Main asyncio loop captured.")
+
         print("Starting up Violence Detection API...")
 
         # Initialize databases
