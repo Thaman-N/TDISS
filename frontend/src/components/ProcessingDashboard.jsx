@@ -569,7 +569,7 @@ const ProcessingDashboard = () => {
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .dropdown-trigger:hover {
-          transform: scale(1.1) rotate(90deg);
+          transform: scale(1.1);
           background: hsl(var(--primary) / 0.1);
         }
         

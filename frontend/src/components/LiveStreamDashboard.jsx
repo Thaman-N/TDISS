@@ -678,45 +678,6 @@ const LiveStreamDashboard = () => {
     return (
       <Card className="stream-card group relative overflow-hidden">
         <style>{`
-          .stream-card {
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            cursor: pointer;
-            position: relative;
-            overflow: hidden;
-          }
-          .stream-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, hsl(var(--primary)), transparent);
-            transition: left 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-          }
-          .stream-card:hover::before {
-            left: 100%;
-          }
-          .stream-card:hover {
-            transform: translateY(-4px) scale(1.02);
-            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
-            border-color: hsl(var(--primary) / 0.2);
-          }
-          .stream-card:hover .stream-title {
-            color: hsl(var(--primary));
-            transform: translateX(2px);
-          }
-          .stream-card:hover .stream-video {
-            transform: scale(1.05);
-          }
-          .stream-card:hover .shimmer-button {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-          }
-          .stream-card:hover .status-icon {
-            transform: scale(1.2) rotate(5deg);
-          }
-          
           .stream-title {
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
           }
@@ -1255,7 +1216,7 @@ const LiveStreamDashboard = () => {
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .dropdown-trigger:hover {
-          transform: scale(1.1) rotate(90deg);
+          transform: scale(1.1);
           background: hsl(var(--primary) / 0.1);
         }
         
@@ -1326,7 +1287,7 @@ const LiveStreamDashboard = () => {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-4xl font-bold mb-2">Live Stream Security</h1>
+          <h1 className="text-4xl font-bold mb-2">Live Streams Dashboard</h1>
           <p className="text-muted-foreground">
             Monitor multiple RTSP camera feeds with real-time violence detection and comprehensive incident analysis
           </p>
@@ -1430,7 +1391,7 @@ const LiveStreamDashboard = () => {
             <div className="text-2xl font-bold stat-value">
               {avgConfidence > 0 ? `${(avgConfidence * 100).toFixed(1)}%` : '0%'}
             </div>
-            <div className="text-xs text-muted-foreground">detection accuracy</div>
+            <div className="text-xs text-muted-foreground">average event confidence scores</div>
           </CardContent>
         </Card>
         

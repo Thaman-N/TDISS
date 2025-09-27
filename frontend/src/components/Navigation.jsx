@@ -28,7 +28,8 @@ const Navigation = ({ darkMode, toggleDarkMode, currentTheme, setTheme, availabl
     { path: '/', label: 'Home' },
     { path: '/upload', label: 'Upload' },
     { path: '/live-streams', label: 'Live Streams' },
-    { path: '/dashboard', label: 'Dashboard' }
+    { path: '/dashboard', label: 'Offline Dashboard' },
+    { path: '/master-dashboard', label: 'Master Dashboard' }
   ]
 
   const isActive = (path) => location.pathname === path
@@ -249,7 +250,7 @@ const Navigation = ({ darkMode, toggleDarkMode, currentTheme, setTheme, availabl
           {/* Theme Controls & Mobile Menu */}
           <div className="flex items-center space-x-2">
             {/* Theme Switcher */}
-            <DropdownMenu>
+            {/* <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="control-button">
                   <Palette className="h-4 w-4 control-icon" />
@@ -271,7 +272,7 @@ const Navigation = ({ darkMode, toggleDarkMode, currentTheme, setTheme, availabl
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
-            </DropdownMenu>
+            </DropdownMenu> */}
 
             {/* Dark Mode Toggle */}
             <Button

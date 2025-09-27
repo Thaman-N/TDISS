@@ -16,7 +16,8 @@ import {
   CheckCircle,
   ArrowRight,
   Play,
-  Star
+  Star,
+  Trophy // Added Trophy icon for the new card
 } from 'lucide-react'
 
 const useScrollAnimation = () => {
@@ -78,7 +79,7 @@ const LandingPage = () => {
     { label: 'Stream/Playback Modes Supported', value: 'Stream & Playback', icon: Eye },
     { label: 'Processing Speed', value: '<20ms', icon: Zap },
     { label: 'Videos used to train', value: '2000+', icon: Play },
-    { label: 'Accuracy Rate', value: '91.25%', icon: CheckCircle }
+    { label: 'Cross-Dataset Generalization', value: '80-90%', icon: CheckCircle }
   ]
 
   const bentoItems = [
@@ -90,7 +91,7 @@ const LandingPage = () => {
     },
     {
       title: 'High Accuracy',
-      description: '91.25% validation accuracy with minimal false positives',
+      description: 'SOTA validation accuracy on 4 datasets',
       icon: Eye,
       className: 'col-span-1'
     },
@@ -107,6 +108,16 @@ const LandingPage = () => {
       className: 'col-span-2'
     }
   ]
+  
+  // Data for the new benchmark card
+  const benchmarkData = [
+    { text: 'Sets new SOTA benchmark of 94.25% validation accuracy on RWF-2000 dataset.' },
+    { text: 'Sets new SOTA benchmark of 99.75% validation accuracy on RLVS dataset.' },
+    { text: 'SOTA performance of 100% validation accuracy on ViolentFlows & Hockey Fight datasets.' },
+    { text: 'High generalizability with 80-90% cross-dataset accuracy.' },
+    { text: '30-50× faster than other SOTA methods while being up to 80 times more efficient.' }
+  ];
+
 
   return (
     <div className="relative">
@@ -256,7 +267,7 @@ const LandingPage = () => {
       </section>
 
       {/* Stats Section */}
-      <section className="py-24 bg-muted/30">
+      <section className="py-24">
         <div className="container mx-auto px-4">
           <AnimatedSection id="stats" delay={100}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
@@ -280,6 +291,42 @@ const LandingPage = () => {
           </AnimatedSection>
         </div>
       </section>
+
+      {/* ================================================================== */}
+      {/* START: NEW BENCHMARK CARD SECTION                                  */}
+      {/* ================================================================== */}
+      <section className="pb-24">
+        <div className="container mx-auto px-4">
+          <AnimatedSection id="benchmark-card" delay={150}>
+            <Card className="max-w-4xl mx-auto overflow-hidden stat-card">
+              <CardHeader>
+                <div className="flex items-center gap-4">
+                  <Trophy className="h-8 w-8 text-primary" />
+                  <div>
+                    <CardTitle className="text-2xl md:text-3xl">Benchmark Performance</CardTitle>
+                    <CardDescription>
+                      Our model sets new State-of-the-Art (SOTA) records across multiple academic datasets.
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-4">
+                  {benchmarkData.map((item, index) => (
+                    <li key={index} className="flex items-start gap-3">
+                      <Star className="h-5 w-5 text-yellow-500 mt-1 flex-shrink-0" />
+                      <p className="text-muted-foreground">{item.text}</p>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          </AnimatedSection>
+        </div>
+      </section>
+      {/* ================================================================== */}
+      {/* END: NEW BENCHMARK CARD SECTION                                    */}
+      {/* ================================================================== */}
 
       {/* Features Section with Magic Bento */}
       <section className="py-24">
@@ -319,7 +366,7 @@ const LandingPage = () => {
       </section>
 
       {/* How It Works */}
-      <section className="py-24 bg-muted/30">
+      <section className="py-24">
         <div className="container mx-auto px-4">
           <AnimatedSection id="how-it-works-header" className="text-center mb-16">
             <h2 className="text-4xl md:text-6xl font-bold mb-6">
@@ -355,14 +402,14 @@ const LandingPage = () => {
 
       {/* CTA Section */}
       <section className="py-24 relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-r from-primary/5 to-primary/10"></div>
+        <div className="absolute inset-0"></div>
         <div className="relative container mx-auto px-4 text-center">
           <AnimatedSection id="cta-content">
             <h2 className="text-4xl md:text-6xl font-bold mb-6">
               Ready to Get Started?
             </h2>
             <p className="text-xl text-muted-foreground mb-12 max-w-2xl mx-auto">
-              Join the future of surveillance with AI-powered aggression detection
+              Witness a surveillance system with AI-powered aggression detection
             </p>
             <div className="flex flex-col gap-4 items-center mb-8">
   <Link to="/upload">
@@ -386,7 +433,7 @@ const LandingPage = () => {
 
       {/* Demo Video Section */}
       <section id="demo-section" className="py-24 relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-muted/10 to-background"></div>
+        <div className="absolute inset-0"></div>
         <div className="relative container mx-auto px-4">
           <AnimatedSection id="demo-header" className="text-center mb-16">
             {/* <Badge variant="outline" className="mb-6 text-sm interactive-badge">
@@ -428,8 +475,8 @@ const LandingPage = () => {
                     <div className="text-sm text-muted-foreground">Process Live Streams</div>
                   </div>
                   <div className="text-center p-4 bg-green-500/5 rounded-lg">
-                    <div className="text-2xl font-bold text-green-600 mb-1">91.25%</div>
-                    <div className="text-sm text-muted-foreground">Validation Accuracy</div>
+                    <div className="text-2xl font-bold text-green-600 mb-1">SOTA Accuracy</div>
+                    <div className="text-sm text-muted-foreground">Tested on 4 datasets</div>
                   </div>
                   <div className="text-center p-4 bg-blue-500/5 rounded-lg">
                     <div className="text-2xl font-bold text-blue-600 mb-1">&lt;20ms</div>

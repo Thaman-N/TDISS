@@ -41,7 +41,7 @@ const UploadInterface = () => {
       const rejection = rejectedFiles[0]
       if (rejection.errors.some(e => e.code === 'file-too-large')) {
         toast.error('File too large', {
-          description: 'Maximum file size is 500MB'
+          description: 'Maximum file size is 2GB'
         })
       } else if (rejection.errors.some(e => e.code === 'file-invalid-type')) {
         toast.error('Invalid file type', {
@@ -297,7 +297,7 @@ const UploadInterface = () => {
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .remove-button:hover {
-          transform: scale(1.1) rotate(90deg);
+          transform: scale(1.1);
           background: hsl(var(--destructive) / 0.1);
           color: hsl(var(--destructive));
         }
@@ -591,7 +591,7 @@ const UploadInterface = () => {
                   <div className="mt-4 space-y-2">
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="outline" className="format-badge">
-                        Max size: 500MB
+                        Max size: 2GB
                       </Badge>
                       {ALLOWED_FORMATS.map(format => (
                         <Badge key={format} variant="outline" className="format-badge">
