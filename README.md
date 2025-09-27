@@ -11,7 +11,9 @@
 
 ## Preview
 
-[![Watch the demo](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-video.gif)](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-video.mp4)
+[![Watch the demo](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-svu.gif)](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-svu.mp4)
+[![Watch the demo](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-mvu.gif)](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/mvu-video.mp4)
+[![Watch the demo](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-mls.gif)](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-mls.mp4)
 
 ---
 

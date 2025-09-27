@@ -78,7 +78,7 @@ const LandingPage = () => {
   const statsData = [
     { label: 'Stream/Playback Modes Supported', value: 'Stream & Playback', icon: Eye },
     { label: 'Processing Speed', value: '<20ms', icon: Zap },
-    { label: 'Videos used to train', value: '2000+', icon: Play },
+    { label: 'Datasets used to train', value: '4', icon: Play },
     { label: 'Cross-Dataset Generalization', value: '80-90%', icon: CheckCircle }
   ]
 
@@ -461,7 +461,7 @@ const LandingPage = () => {
                     preload="metadata"
                     poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='450' viewBox='0 0 800 450'%3E%3Crect width='800' height='450' fill='%23f1f5f9'/%3E%3Cg fill='%236b7280'%3E%3Ccircle cx='400' cy='200' r='30'/%3E%3Cpolygon points='385,185 385,215 415,200'/%3E%3C/g%3E%3Ctext x='400' y='280' text-anchor='middle' fill='%236b7280' font-family='system-ui' font-size='16'%3EDemo Video - Violence Detection%3C/text%3E%3C/svg%3E"
                   >
-                    <source src="/demo-video.mp4" type="video/mp4" />
+                    <source src="/demo-stitched.mp4" type="video/mp4" />
                     Your browser does not support the video tag.
                   </video>
                   

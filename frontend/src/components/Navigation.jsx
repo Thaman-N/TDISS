@@ -28,7 +28,7 @@ const Navigation = ({ darkMode, toggleDarkMode, currentTheme, setTheme, availabl
     { path: '/', label: 'Home' },
     { path: '/upload', label: 'Upload' },
     { path: '/live-streams', label: 'Live Streams' },
-    { path: '/dashboard', label: 'Offline Dashboard' },
+    { path: '/dashboard', label: 'Upload Dashboard' },
     { path: '/master-dashboard', label: 'Master Dashboard' }
   ]
 
