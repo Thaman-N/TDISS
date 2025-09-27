@@ -17,8 +17,10 @@ import re
 from datetime import datetime, timedelta
 import sqlite3
 from dataclasses import dataclass
+from contextlib import contextmanager
 import threading
 from dotenv import load_dotenv
+import torch
 
 # Rate limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -60,6 +62,7 @@ def secure_filename(filename):
 
 # Import your PyTorch detection module (copy these files to the same directory)
 from torch_detection import load_violence_detection_model, extract_frames, preprocess_frames, predict_violence, extract_consecutive_frame_sequences
+
 
 main_loop = None
 
@@ -113,46 +116,52 @@ class ActiveIncident:
     event_ids: List[int]
     
 class EventStitchingManager:
-    """Manages stitching of continuous violent events"""
+    """Manages stitching of continuous violent events - FIXED: Per-stream locking"""
     
     def __init__(self, stitch_window: float = 10.0, max_incident_duration: float = 60.0):
-        self.stitch_window = stitch_window  # seconds between detections to stitch
-        self.max_incident_duration = max_incident_duration  # max total incident length
-        self.active_incidents: Dict[int, ActiveIncident] = {}  # stream_id -> incident
-        self._lock = threading.Lock()
+        self.stitch_window = stitch_window
+        self.max_incident_duration = max_incident_duration
+        self.active_incidents: Dict[int, ActiveIncident] = {}
+        # REMOVED: self._lock = threading.Lock()  # This was the global bottleneck
         self.finalization_timers: Dict[int, threading.Timer] = {}
+        self.stream_locks: Dict[int, threading.Lock] = {}  # Per-stream locks instead
+    
+    def _get_stream_lock(self, stream_id: int) -> threading.Lock:
+        """Get or create lock for specific stream"""
+        if stream_id not in self.stream_locks:
+            self.stream_locks[stream_id] = threading.Lock()
+        return self.stream_locks[stream_id]
     
     def cleanup_stream_incidents(self, stream_id: int):
         """Cleanup and finalize any active incidents for a stream"""
-        with self._lock:
+        with self._get_stream_lock(stream_id):  # Only lock this stream
             if stream_id in self.active_incidents:
                 print(f"Finalizing orphaned incident for stream {stream_id}")
-                # Cancel timer first
                 if stream_id in self.finalization_timers:
                     self.finalization_timers[stream_id].cancel()
                     del self.finalization_timers[stream_id]
-                # Force finalize the incident
                 self.finalize_incident(stream_id)
-        
+    
     def should_stitch_to_existing(self, stream_id: int, current_time: float) -> bool:
         """Check if this detection should be stitched to an existing incident"""
-        if stream_id not in self.active_incidents:
-            return False
+        with self._get_stream_lock(stream_id):  # Only lock this stream
+            if stream_id not in self.active_incidents:
+                return False
+                
+            incident = self.active_incidents[stream_id]
+            time_since_last = current_time - incident.last_detection_time
+            total_duration = current_time - incident.start_time
             
-        incident = self.active_incidents[stream_id]
-        time_since_last = current_time - incident.last_detection_time
-        total_duration = current_time - incident.start_time
-        
-        return (time_since_last <= self.stitch_window and 
-                total_duration <= self.max_incident_duration)
+            return (time_since_last <= self.stitch_window and 
+                    total_duration <= self.max_incident_duration)
     
     def start_new_incident(self, stream_id: int, stream_name: str, current_time: float, 
                         confidence: float, frame_buffer: List[np.ndarray], event_id: int) -> str:
-        """Start a new incident with recent frame history - IMPROVED VERSION"""
+        """Start a new incident - FIXED: Only locks specific stream"""
         incident_id = f"incident_{stream_id}_{int(current_time)}"
         
-        with self._lock:
-            # Verify the event_id exists before creating incident
+        with self._get_stream_lock(stream_id):  # Only lock this stream
+            # Verify the event_id exists
             try:
                 conn = sqlite3.connect(event_db.db_path)
                 cursor = conn.cursor()
@@ -175,11 +184,9 @@ class EventStitchingManager:
                 event_ids=[event_id]
             )
             
-            # Cancel any existing finalization timer
             if stream_id in self.finalization_timers:
                 self.finalization_timers[stream_id].cancel()
             
-            # Start new finalization timer
             self._schedule_incident_finalization(stream_id)
             
         print(f"Started new incident {incident_id} for stream {stream_id} with event {event_id}")
@@ -187,8 +194,8 @@ class EventStitchingManager:
     
     def extend_incident(self, stream_id: int, current_time: float, 
                        confidence: float, additional_frames: List[np.ndarray], event_id: int):
-        """Extend existing incident"""
-        with self._lock:
+        """Extend existing incident - FIXED: Only locks specific stream"""
+        with self._get_stream_lock(stream_id):  # Only lock this stream
             if stream_id in self.active_incidents:
                 incident = self.active_incidents[stream_id]
                 incident.last_detection_time = current_time
@@ -196,12 +203,10 @@ class EventStitchingManager:
                 incident.detection_timestamps.append(current_time)
                 incident.event_ids.append(event_id)
                 
-                # Add recent frames to incident buffer (limit total size)
                 if additional_frames and len(incident.frame_buffer) < 200:
                     frames_to_add = min(len(additional_frames), 200 - len(incident.frame_buffer))
                     incident.frame_buffer.extend(additional_frames[-frames_to_add:])
                 
-                # Reset finalization timer
                 if stream_id in self.finalization_timers:
                     self.finalization_timers[stream_id].cancel()
                 self._schedule_incident_finalization(stream_id)
@@ -218,8 +223,8 @@ class EventStitchingManager:
         timer.start()
     
     def finalize_incident(self, stream_id: int):
-        """Finalize incident by creating stitched clip and updating events - IMPROVED VERSION"""
-        with self._lock:
+        """Finalize incident - FIXED: Only locks specific stream"""
+        with self._get_stream_lock(stream_id):  # Only lock this stream
             if stream_id not in self.active_incidents:
                 print(f"No active incident found for stream {stream_id}")
                 return
@@ -228,27 +233,22 @@ class EventStitchingManager:
             print(f"Finalizing incident {incident.incident_id} for stream {stream_id}")
             
             try:
-                # Create stitched video clip
                 stitched_clip_path = self._create_stitched_clip(incident)
                 print(f"Stitched clip created: {stitched_clip_path}")
                 
-                # Update all related events in database WITH improved error handling
                 success = self._update_incident_events(incident, stitched_clip_path)
                 
                 if success:
-                    # Send finalization notification only if database update succeeded
                     self._send_incident_finalized_notification(incident, stitched_clip_path)
                     print(f"Successfully finalized incident {incident.incident_id} with {len(incident.event_ids)} events")
                 else:
                     print(f"Database update failed for incident {incident.incident_id}")
-                    # Could retry here or send error notification
                 
             except Exception as e:
                 print(f"Error finalizing incident {incident.incident_id}: {e}")
                 import traceback
                 traceback.print_exc()
             finally:
-                # Always clean up the active incident
                 del self.active_incidents[stream_id]
                 if stream_id in self.finalization_timers:
                     del self.finalization_timers[stream_id]
@@ -560,16 +560,46 @@ class StreamDatabase:
         conn.commit()
         conn.close()
 
+class DatabaseConnectionPool:
+    """Simple connection pool for SQLite to reduce contention"""
+    def __init__(self, db_path: str, pool_size: int = 3):
+        self.db_path = db_path
+        self.pool_size = pool_size
+        self.connections = queue.Queue(maxsize=pool_size)
+        self.lock = threading.Lock()
+        
+        # Pre-create connections
+        for _ in range(pool_size):
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")  # Enable WAL mode for better concurrency
+            self.connections.put(conn)
+    
+    @contextmanager
+    def get_connection(self):
+        """Get a connection from the pool"""
+        try:
+            conn = self.connections.get(timeout=5.0)
+            yield conn
+        except queue.Empty:
+            # Fallback: create temporary connection
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            yield conn
+            conn.close()
+            return
+        finally:
+            self.connections.put(conn)
 
 class EventDatabase:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
+        self.connection_pool = DatabaseConnectionPool(db_path)  # Add this line
         self.init_database()
 
     def init_database(self):
         """Initialize the events database"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        with self.connection_pool.get_connection() as conn:
+            cursor = conn.cursor()
 
         # Create events table (existing)
         cursor.execute('''
@@ -2200,10 +2230,10 @@ def recover_stream_states():
             print(f"Error during stream state recovery: {e}")
 
 async def check_stream_health():
-    """Periodically check stream health and auto-recover if needed"""
+    """Enhanced stream health monitoring"""
     while not global_shutdown_event.is_set():
         try:
-            await asyncio.sleep(30)  # Check every 30 seconds
+            await asyncio.sleep(30)
             
             if global_shutdown_event.is_set():
                 break
@@ -2215,26 +2245,28 @@ async def check_stream_health():
                     
                 try:
                     processor = active_streams[stream_id]['processor']
+                    health = processor.check_health()
                     
-                    # Check if threads are alive
-                    capture_alive = processor.capture_thread and processor.capture_thread.is_alive()
-                    process_alive = processor.process_thread and processor.process_thread.is_alive()
+                    if 'error' in health:
+                        print(f"Stream {stream_id} health check error: {health['error']}")
+                        continue
                     
-                    if not processor.is_running or not capture_alive or not process_alive:
-                        print(f"Stream {stream_id} health check failed - marking as error")
+                    # Check if any critical component is down
+                    if not health['capture_thread'] or not health['process_thread']:
+                        print(f"Stream {stream_id} critical thread failure: {health}")
                         
-                        # Stop the problematic stream
+                        # Try to restart the stream
                         try:
                             processor.stop_stream()
                         except:
                             pass
                         
-                        # Update database status
                         if stream_db:
-                            try:
-                                stream_db.update_stream_status(stream_id, 'error')
-                            except:
-                                pass
+                            stream_db.update_stream_status(stream_id, 'error')
+                    
+                    # Log health status occasionally
+                    elif stream_id % 2 == 0:  # Log every other stream to reduce spam
+                        print(f"Stream {stream_id} health: threads OK, queue: {health['queue_size']}, buffer: {health['buffer_size']}")
                         
                 except Exception as e:
                     print(f"Error checking health for stream {stream_id}: {e}")
@@ -2293,6 +2325,10 @@ class RTSPStreamProcessor:
         self.rtsp_url = rtsp_url
         self.stream_name = stream_name
 
+        # Each stream gets its own model instance
+        self.model = None
+        self.model_device = None
+
         # Capture objects and control
         self.cap = None
         self.is_running = False
@@ -2318,64 +2354,82 @@ class RTSPStreamProcessor:
         # Thread synchronization
         self._lock = threading.Lock()
         
-        # NEW: Background task queue for heavy operations
+        # Background task queue
         self.detection_queue = queue.Queue(maxsize=10)
 
+    def _load_model_instance(self):
+        """Load dedicated model instance for this stream"""
+        try:
+            print(f"Loading model instance for stream {self.stream_id}...")
+            
+            # Load model with same device detection logic
+            device = None
+            if torch.cuda.is_available():
+                try:
+                    test_tensor = torch.zeros(1, device='cuda')
+                    test_tensor = test_tensor + 1
+                    device = torch.device('cuda')
+                    print(f"Stream {self.stream_id}: Using CUDA")
+                except Exception as e:
+                    print(f"Stream {self.stream_id}: CUDA incompatible ({e}), using CPU")
+                    device = torch.device('cpu')
+            else:
+                device = torch.device('cpu')
+                print(f"Stream {self.stream_id}: CUDA not available, using CPU")
+            
+            self.model_device = device
+            
+            # Load the model (reuse existing function but for this instance)
+            model, _ = load_violence_detection_model(MODEL_PATH, device)
+            
+            print(f"Stream {self.stream_id}: Model loaded successfully on {device}")
+            return model
+            
+        except Exception as e:
+            print(f"Error loading model for stream {self.stream_id}: {e}")
+            return None
+
     def _run_detection(self):
-        """Run violence detection - OPTIMIZED to avoid blocking"""
-        if model is None or len(self.rgb_frame_buffer) < self.model_temporal_length:
+        """Run violence detection using dedicated model instance"""
+        if self.model is None or len(self.rgb_frame_buffer) < self.model_temporal_length:
             return
 
         try:
-            # Extract frames and run detection (keep this fast)
+            # Extract frames and run detection
             frames_list = list(self.rgb_frame_buffer)[-self.model_temporal_length:]
             frames_array = np.array(frames_list, dtype=np.uint8)
-
-            # DEBUG: Check temporal diversity
-            frame_differences = []
-            for i in range(len(frames_array) - 1):
-                diff = np.mean(np.abs(frames_array[i].astype(np.float32) - frames_array[i+1].astype(np.float32)))
-                frame_differences.append(diff)
-
-            avg_frame_diff = np.mean(frame_differences) if frame_differences else 0
-            print(f"Stream {self.stream_id}: Avg frame difference: {avg_frame_diff:.2f}")
-
-            if avg_frame_diff < 1.0:
-                print(f"WARNING: Stream {self.stream_id} has very low frame diversity")
 
             print(f"Stream {self.stream_id}: Detection input shape: {frames_array.shape}")
 
             # Ensure model is in eval mode
-            model.eval()
+            self.model.eval()
 
             # Check if model uses motion enhancement
-            use_motion = hasattr(model, 'use_motion_enhancement') and model.use_motion_enhancement
+            use_motion = hasattr(self.model, 'use_motion_enhancement') and self.model.use_motion_enhancement
             print(f"Stream {self.stream_id}: Using motion enhancement: {use_motion}")
 
-            # Run preprocessing and prediction (this is the heavy part but unavoidable)
+            # Run preprocessing and prediction using dedicated model
             processed_data = preprocess_frames(frames_array, compute_flow=use_motion)
 
+            # Ensure tensors are on correct device
             for key, tensor in processed_data.items():
-                print(f"Stream {self.stream_id}: {key} tensor - shape: {tensor.shape}, dtype: {tensor.dtype}, range: [{tensor.min():.3f}, {tensor.max():.3f}]")
+                if tensor.device != self.model_device:
+                    processed_data[key] = tensor.to(self.model_device)
 
-            # Run prediction
+            # Run prediction with dedicated model (no locking needed)
             is_violent, confidence, inference_time = predict_violence(
-                model, processed_data, DETECTION_THRESHOLD, debug=True
+                self.model, processed_data, DETECTION_THRESHOLD, debug=True
             )
 
             print(f"Stream {self.stream_id}: Final result - Violence: {is_violent}, Confidence: {confidence:.3f}, Time: {inference_time:.3f}s")
 
-            # CRITICAL CHANGE: If violence detected, queue the heavy processing instead of doing it inline
+            # Queue detection event if violence detected
             if is_violent and confidence > DETECTION_THRESHOLD:
                 print(f"ALERT: Violence detected in stream {self.stream_id}: {confidence:.3f}")
                 
-                if confidence >= 0.99:
-                    print(f"NOTE: High confidence detection ({confidence:.3f}) for stream {self.stream_id}")
-                
-                # NEW: Queue the heavy event processing instead of doing it synchronously
                 current_time = time.time()
                 
-                # Get snapshot of current frame and buffer state (quick)
+                # Get snapshot of current frame and buffer state
                 recent_frames = []
                 current_frame = None
                 with self._lock:
@@ -2384,7 +2438,7 @@ class RTSPStreamProcessor:
                     if self.last_display_frame is not None:
                         current_frame = self.last_display_frame.copy()
                 
-                # Submit to background queue (non-blocking)
+                # Submit to background queue
                 try:
                     detection_data = {
                         'stream_id': self.stream_id,
@@ -2434,12 +2488,18 @@ class RTSPStreamProcessor:
             print(f"Error sending immediate alert for stream {self.stream_id}: {e}")
 
     def start_stream(self):
-        """Start the RTSP stream with background processing"""
+        """Start the RTSP stream with dedicated model"""
         if not self.validate_rtsp_url(self.rtsp_url):
             print(f"Invalid RTSP URL: {self.rtsp_url}")
             return False
 
         try:
+            # Load model instance first
+            self.model = self._load_model_instance()
+            if self.model is None:
+                print(f"Failed to load model for stream {self.stream_id}")
+                return False
+
             # Initialize capture with proper settings
             self.cap = cv2.VideoCapture(self.rtsp_url)
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -2473,15 +2533,13 @@ class RTSPStreamProcessor:
             # Start threads
             self.capture_thread = threading.Thread(target=self._capture_frames, daemon=True)
             self.process_thread = threading.Thread(target=self._process_frames, daemon=True)
-            
-            # NEW: Start background detection processing thread
             self.background_thread = threading.Thread(target=self._background_detection_processor, daemon=True)
 
             self.capture_thread.start()
             self.process_thread.start()
             self.background_thread.start()
 
-            print(f"Successfully started stream {self.stream_id}: {self.stream_name}")
+            print(f"Successfully started stream {self.stream_id}: {self.stream_name} with dedicated model")
             return True
 
         except Exception as e:
@@ -2520,7 +2578,7 @@ class RTSPStreamProcessor:
         print(f"Background detection processor stopped for stream {self.stream_id}")
 
     def _process_detection_event_heavy(self, detection_data):
-        """Process the heavy parts of detection event (thumbnails, clips, database, notifications)"""
+        """Process detection event without blocking other streams"""
         try:
             stream_id = detection_data['stream_id']
             stream_name = detection_data['stream_name']
@@ -2532,28 +2590,16 @@ class RTSPStreamProcessor:
             
             timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_time))
             
-            print(f"Stream {stream_id}: Starting heavy processing for detection at {timestamp_str}")
+            print(f"Stream {stream_id}: Starting background processing for detection at {timestamp_str}")
             
-            # Check if this should be stitched to existing incident
+            # CRITICAL: Check stitching BEFORE heavy operations
             should_stitch = stitching_manager.should_stitch_to_existing(stream_id, current_time)
             
-            # Generate thumbnail (heavy I/O operation)
-            thumbnail_url = self._generate_thumbnail_background(stream_id, current_time, current_frame)
-            
-            # Generate clip (very heavy operation) 
-            clip_url = self._generate_clip_background(stream_id, current_time, current_frame)
-            
-            # Handle event stitching logic
+            # Lightweight operations first
             incident_id = ""
             incident_status = "active"
             
-            if should_stitch:
-                incident = stitching_manager.active_incidents.get(stream_id)
-                if incident:
-                    incident_id = incident.incident_id
-                print(f"Extending incident {incident_id} for stream {stream_id}")
-            
-            # Create event record
+            # Create event record FIRST (lightweight)
             event = ViolenceEvent(
                 timestamp=timestamp_str,
                 source_type='stream',
@@ -2563,8 +2609,8 @@ class RTSPStreamProcessor:
                 end_time=current_time + self.detection_interval,
                 duration=self.detection_interval,
                 confidence=confidence,
-                thumbnail_path=thumbnail_url,
-                clip_path=clip_url,
+                thumbnail_path="",  # Set later
+                clip_path="",      # Set later
                 incident_status=incident_status,
                 incident_id=incident_id,
                 metadata=json.dumps({
@@ -2574,39 +2620,55 @@ class RTSPStreamProcessor:
                     'buffer_size': len(self.rgb_frame_buffer),
                     'model_input_size': self.model_input_size,
                     'temporal_length': self.model_temporal_length,
-                    'pipeline_version': 'stitched_stream_v3_background',
+                    'pipeline_version': 'stitched_stream_v3_async',
                     'frame_timestamp': current_time,
                     'detection_interval': self.detection_interval
                 })
             )
 
-            # Save to database (I/O operation)
+            # Save to database (uses connection pool now)
             event_id = event_db.save_event(event)
             stream_db.increment_detection_count(stream_id)
 
-            # Handle incident stitching
+            # Handle incident stitching (per-stream locking now)
             if should_stitch:
+                incident = stitching_manager.active_incidents.get(stream_id)
+                if incident:
+                    incident_id = incident.incident_id
                 stitching_manager.extend_incident(stream_id, current_time, confidence, recent_frames, event_id)
             else:
                 incident_id = stitching_manager.start_new_incident(
                     stream_id, stream_name, current_time, confidence, recent_frames, event_id
                 )
-                # Update event with incident_id
-                conn = sqlite3.connect(event_db.db_path)
-                cursor = conn.cursor()
-                cursor.execute('UPDATE violence_events SET incident_id = ? WHERE id = ?', (incident_id, event_id))
-                conn.commit()
-                conn.close()
+                # Update event with incident_id (quick operation)
+                with event_db.connection_pool.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('UPDATE violence_events SET incident_id = ? WHERE id = ?', (incident_id, event_id))
+                    conn.commit()
 
-            print(f"Stream {stream_id}: Completed heavy processing for event {event_id}")
+            print(f"Stream {stream_id}: Completed core processing for event {event_id}")
 
-            # Send final notifications (network I/O operations)
+            # Heavy I/O operations at the end (these can be slow without affecting other streams)
+            thumbnail_url = self._generate_thumbnail_background(stream_id, current_time, current_frame)
+            clip_url = self._generate_clip_background(stream_id, current_time, current_frame)
+            
+            # Update event with media URLs
+            if thumbnail_url or clip_url:
+                with event_db.connection_pool.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        'UPDATE violence_events SET thumbnail_path = ?, clip_path = ? WHERE id = ?',
+                        (thumbnail_url, clip_url, event_id)
+                    )
+                    conn.commit()
+
+            # Send notifications last (network I/O)
             self._send_final_notifications_background(event_id, stream_id, stream_name, confidence, 
                                                     timestamp_str, thumbnail_url, clip_url, 
                                                     incident_id, incident_status, should_stitch)
 
         except Exception as e:
-            print(f"Error in heavy detection processing for stream {detection_data.get('stream_id', 'unknown')}: {e}")
+            print(f"Error in background processing for stream {detection_data.get('stream_id', 'unknown')}: {e}")
             import traceback
             traceback.print_exc()
 
@@ -2847,21 +2909,46 @@ class RTSPStreamProcessor:
             return None
 
     def _capture_frames(self):
-        """Dedicated thread for capturing frames from RTSP stream"""
+        """Capture frames with better error recovery"""
         consecutive_failures = 0
         max_failures = 10
+        reconnect_attempts = 0
+        max_reconnect_attempts = 3
 
-        while self.is_running and not global_shutdown_event.is_set() and self.cap and self.cap.isOpened():
+        while self.is_running and not global_shutdown_event.is_set():
             try:
+                # Check if capture is still valid
+                if not self.cap or not self.cap.isOpened():
+                    print(f"Stream {self.stream_id}: Reconnecting to {self.rtsp_url}")
+                    if self.cap:
+                        self.cap.release()
+                    
+                    self.cap = cv2.VideoCapture(self.rtsp_url)
+                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    
+                    if not self.cap.isOpened():
+                        reconnect_attempts += 1
+                        if reconnect_attempts >= max_reconnect_attempts:
+                            print(f"Stream {self.stream_id}: Max reconnection attempts reached")
+                            break
+                        time.sleep(2.0)  # Wait before retry
+                        continue
+                    else:
+                        reconnect_attempts = 0  # Reset on successful reconnection
+
                 ret, frame = self.cap.read()
 
                 if not ret or frame is None:
                     consecutive_failures += 1
-                    print(f"Stream {self.stream_id}: Failed to read frame ({consecutive_failures}/{max_failures})")
+                    print(f"Stream {self.stream_id}: Frame read failed ({consecutive_failures}/{max_failures})")
 
                     if consecutive_failures >= max_failures:
-                        print(f"Stream {self.stream_id}: Too many consecutive failures, stopping")
-                        break
+                        print(f"Stream {self.stream_id}: Too many consecutive failures, will attempt reconnection")
+                        if self.cap:
+                            self.cap.release()
+                            self.cap = None
+                        consecutive_failures = 0
+                        continue
 
                     time.sleep(0.1)
                     continue
@@ -2884,7 +2971,7 @@ class RTSPStreamProcessor:
                 time.sleep(0.033)
 
             except Exception as e:
-                print(f"Error in capture thread for stream {self.stream_id}: {e}")
+                print(f"Exception in capture thread for stream {self.stream_id}: {e}")
                 consecutive_failures += 1
                 if consecutive_failures >= max_failures:
                     break
@@ -2933,12 +3020,14 @@ class RTSPStreamProcessor:
 
                 if frame_counter % 15 == 0:
                     try:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        loop.run_until_complete(self._send_frame_update())
-                        loop.close()
+                        # Don't create async loop, just schedule the coroutine
+                        if main_loop and main_loop.is_running():
+                            asyncio.run_coroutine_threadsafe(
+                                self._send_frame_update(),
+                                main_loop
+                            )
                     except Exception as e:
-                        print(f"Error sending frame update for stream {self.stream_id}: {e}")
+                        print(f"Error scheduling frame update for stream {self.stream_id}: {e}")
 
             except Exception as e:
                 print(f"Error in process thread for stream {self.stream_id}: {e}")
@@ -2995,20 +3084,49 @@ class RTSPStreamProcessor:
             return None
 
     async def _send_frame_update(self):
-        """Send frame update via WebSocket"""
+        """Send frame update via WebSocket - FIXED"""
         try:
             frame_data = self.get_frame_base64()
-            if frame_data:
-                await manager.send_job_update(f"stream_{self.stream_id}", {
+            if frame_data and main_loop and main_loop.is_running():
+                payload = {
                     'type': 'stream_frame',
                     'stream_id': self.stream_id,
                     'frame': frame_data,
                     'status': 'active',
                     'buffer_size': len(self.rgb_frame_buffer)
-                })
+                }
+                
+                # Use the existing main loop instead of creating new one
+                asyncio.run_coroutine_threadsafe(
+                    manager.send_job_update(f"stream_{self.stream_id}", payload),
+                    main_loop
+                )
         except Exception as e:
             print(f"Error sending frame update for stream {self.stream_id}: {e}")
 
+    def check_health(self):
+        """Check if stream is healthy"""
+        try:
+            # Check if threads are alive
+            capture_alive = self.capture_thread and self.capture_thread.is_alive()
+            process_alive = self.process_thread and self.process_thread.is_alive()
+            background_alive = hasattr(self, 'background_thread') and self.background_thread and self.background_thread.is_alive()
+            
+            # Check if we're getting frames
+            with self._lock:
+                has_recent_frame = self.last_display_frame is not None
+            
+            return {
+                'capture_thread': capture_alive,
+                'process_thread': process_alive, 
+                'background_thread': background_alive,
+                'has_frame': has_recent_frame,
+                'queue_size': self.raw_frame_queue.qsize(),
+                'buffer_size': len(self.rgb_frame_buffer)
+            }
+        except Exception as e:
+            print(f"Error checking health for stream {self.stream_id}: {e}")
+            return {'error': str(e)}
 
 async def cleanup_old_jobs():
     """Clean up old completed jobs to prevent memory leaks"""
@@ -3093,21 +3211,29 @@ async def startup_event():
         stitching_manager = EventStitchingManager()
         print("Databases and stitching manager initialized successfully")
 
-        # Initialize Discord notifier - ADD THIS BLOCK
+        # Initialize Discord notifier
         print("Initializing Discord notifications...")
         discord_notifier = DiscordNotifier(DISCORD_WEBHOOK_URL, DISCORD_NOTIFICATIONS_ENABLED)
         if discord_notifier.enabled:
             discord_notifier.send_system_status(
-                "Violence Detection System started successfully! 🚀", 
+                "Violence Detection System started successfully!", 
                 "success"
             )
 
         # Recover stream states from previous shutdown
         recover_stream_states()
 
-        print("Loading model...")
-        model, _ = load_violence_detection_model(MODEL_PATH)
-        print("Model loaded successfully")
+        # Load global model for video upload processing only
+        print("Loading global model for video upload processing...")
+        try:
+            model, _ = load_violence_detection_model(MODEL_PATH)
+            print("Global model loaded successfully for video uploads")
+        except Exception as e:
+            print(f"Failed to load global model: {e}")
+            model = None
+            print("Video upload processing will be disabled")
+
+        print("Stream models will be loaded individually per-stream as needed")
 
         # Start background tasks
         asyncio.create_task(periodic_cleanup())
