@@ -9,10 +9,20 @@
 
 ---
 
-## Preview
+## Single Video Upload
 
 [![Watch the demo](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-svu.gif)](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-svu.mp4)
+
+---
+
+## Multi Video Upload
+
 [![Watch the demo](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-mvu.gif)](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/mvu-video.mp4)
+
+---
+
+## Multiple Live Streams - Testing occlusion, glare & reflections
+
 [![Watch the demo](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-mls.gif)](https://github.com/Thaman-N/TDISS/raw/main/frontend/public/demo-mls.mp4)
 
 ---
@@ -20,7 +30,9 @@
 ## Table of Contents
 
 - [Aggression Detection Dashboard](#aggression-detection-dashboard)
-  - [Preview](#preview)
+  - [Single Video Upload](#single-video-upload)
+  - [Multi Video Upload](#multi-video-upload)
+  - [Multiple Live Streams - Testing occlusion, glare \& reflections](#multiple-live-streams---testing-occlusion-glare--reflections)
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
   - [Features](#features)
