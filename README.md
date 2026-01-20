@@ -100,7 +100,13 @@ pip install -r requirements.txt
 pip install -c constraints.txt torch torchvision torchaudio #cpu build
 pip install -c constraints.txt torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 #cuda build
 
-# If you run into slowapi or fvcore import errors, run - pip install slowapi fvcore
+pip install slowapi fvcore
+
+#Cuda capable hardware needed for TensorRT
+pip install onnxscript
+pip install onnx onnxruntime-gpu tensorrt
+conda install -c conda-forge pycuda
+
 
 # Frontend setup
 cd frontend
