@@ -5,6 +5,47 @@ from typing import Dict, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
+class TemporalScaleAdaptiveBlock(nn.Module):
+    """
+    NOVELTY MODULE: 'FPS-Aware' Feature Calibration.
+    Dynamically re-weights channels based on motion velocity to handle
+    variable frame rate artifacts (Slide Shows vs Sped-Up).
+    """
+    def __init__(self, in_channels, reduction=16):
+        super(TemporalScaleAdaptiveBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool3d(1)
+        
+        # The "Speedometer" Branch
+        # Calculates importance weights based on temporal velocity
+        self.motion_fc = nn.Sequential(
+            nn.Linear(in_channels, max(4, in_channels // reduction), bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(max(4, in_channels // reduction), in_channels, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        # x: [Batch, Channel, Time, Height, Width]
+        b, c, t, h, w = x.size()
+        
+        # 1. Calculate Feature Velocity (Diff between T and T-1)
+        # "Is the video changing fast or slow?"
+        current = x[:, :, 1:, :, :]
+        prev    = x[:, :, :-1, :, :]
+        velocity = torch.abs(current - prev)
+        
+        # Pad back to original time length (Time 0 has 0 velocity)
+        velocity = F.pad(velocity, (0,0, 0,0, 1,0), "constant", 0)
+        
+        # 2. Get Global Speed Score per channel
+        global_speed = self.avg_pool(velocity).view(b, c)
+        
+        # 3. Calibrate features based on speed
+        # "If speed is high, suppress static texture channels, boost motion channels"
+        weights = self.motion_fc(global_speed).view(b, c, 1, 1, 1)
+        
+        return x * weights
+
 
 class MotionEnhancementModule(nn.Module):
     """
@@ -67,10 +108,10 @@ class MotionEnhancementModule(nn.Module):
         return motion_features
 
 
-class X3DViolenceDetector(nn.Module):
+class CleanX3DViolenceDetector(nn.Module):
     """
     Clean X3D model for violence detection.
-    Removed dead code while maintaining functionality.
+    Supports Optional Motion Enhancement and New TSA (FPS-Aware) Block.
     """
     
     def __init__(
@@ -79,35 +120,27 @@ class X3DViolenceDetector(nn.Module):
         num_classes: int = 2,
         dropout_rate: float = 0.15,
         use_motion_enhancement: bool = True,
-        device: str = "auto"
+        use_temporal_kernel_optimization: bool = True, # Explicit flag
+        use_tsa_block: bool = False, # NEW: Flag for Algo Novelty
+        device: str = "cuda"
     ):
         super().__init__()
         
-        # Auto-detect device with CUDA compatibility check
-        if device == "auto":
-            if torch.cuda.is_available():
-                try:
-                    # Test CUDA compatibility with a small tensor operation
-                    test_tensor = torch.zeros(1, device='cuda')
-                    test_tensor = test_tensor + 1
-                    device = "cuda"
-                    print("CUDA is available and compatible")
-                except Exception as e:
-                    print(f"CUDA available but incompatible: {e}")
-                    print("Falling back to CPU")
-                    device = "cpu"
-            else:
-                device = "cpu"
-                print("CUDA not available, using CPU")
-        
         self.use_motion_enhancement = use_motion_enhancement
+        self.use_temporal_kernel_optimization = use_temporal_kernel_optimization
+        self.use_tsa_block = use_tsa_block
         self.num_classes = num_classes
         self.device = device
         
         # Load and optimize X3D backbone
-        print(f"Loading {x3d_model_name} model...")
+        # print(f"Loading {x3d_model_name} model...")
         self.x3d_backbone = self._load_and_optimize_x3d(x3d_model_name)
         self.x3d_backbone.to(self.device)
+
+        # === ALGORITHMIC NOVELTY: FPS-Aware Block ===
+        # We will initialize it lazily in forward to auto-detect channel dims,
+        # or we could hardcode. Lazy initialization is safer for different X3D variants.
+        self.tsa_block = None 
         
         # Get feature dimension
         self.feature_dim = self._get_feature_dim()
@@ -128,11 +161,12 @@ class X3DViolenceDetector(nn.Module):
         self.classifier = self._create_classifier(total_features, dropout_rate)
         self.classifier.to(self.device)
         
-        print(f"Model initialized with {total_features} input features")
-        print(f"X3D features: {self.feature_dim}, Motion features: {128 if use_motion_enhancement else 0}")
+        # print(f"Model initialized with {total_features} input features")
+        # if self.use_tsa_block:
+        #    print("✅ FPS-Adaptive TSA Block ENABLED (Novelty Module)")
     
     def _load_and_optimize_x3d(self, model_name: str):
-        """Load X3D and apply temporal kernel optimizations"""
+        """Load X3D and apply temporal kernel optimizations if requested"""
         try:
             model = torch.hub.load(
                 'facebookresearch/pytorchvideo', 
@@ -140,8 +174,9 @@ class X3DViolenceDetector(nn.Module):
                 pretrained=True
             )
             
-            # Apply temporal kernel optimizations
-            self._optimize_temporal_kernels(model)
+            # Apply temporal kernel optimizations ONLY if flag is True
+            if self.use_temporal_kernel_optimization:
+                self._optimize_temporal_kernels(model)
             
             return model
             
@@ -153,7 +188,8 @@ class X3DViolenceDetector(nn.Module):
                 'x3d_s', 
                 pretrained=True
             )
-            self._optimize_temporal_kernels(model)
+            if self.use_temporal_kernel_optimization:
+                self._optimize_temporal_kernels(model)
             return model
     
     def _optimize_temporal_kernels(self, model):
@@ -190,7 +226,7 @@ class X3DViolenceDetector(nn.Module):
                                 new_conv.bias.data = child.bias.data
                         
                         setattr(module, name, new_conv)
-                        print(f"Reduced temporal kernel: {child.kernel_size} -> {new_kernel}")
+                        # print(f"Reduced temporal kernel: {child.kernel_size} -> {new_kernel}")
                 else:
                     modify_conv3d(child)
         
@@ -206,7 +242,10 @@ class X3DViolenceDetector(nn.Module):
         return features.shape[1]
     
     def _extract_x3d_features(self, rgb_frames: torch.Tensor) -> torch.Tensor:
-        """Extract features from X3D backbone"""
+        """
+        Extract features from X3D backbone.
+        Injects TSA Block if enabled.
+        """
         x = rgb_frames
         
         # Forward through X3D backbone (excluding final classification head)
@@ -215,7 +254,20 @@ class X3DViolenceDetector(nn.Module):
                 # Skip the final classification head block
                 if hasattr(block, 'proj') and i == len(self.x3d_backbone.blocks) - 1:
                     continue
+                
                 x = block(x)
+
+                # === INJECT NOVELTY HERE ===
+                # Apply TSA Block after Block 3 (mid-level features)
+                # This ensures we calibrate features before the final high-level semantic abstraction
+                if i == 3 and self.use_tsa_block:
+                    if self.tsa_block is None:
+                        # Initialize on first run to match channel dimensions
+                        channels = x.size(1)
+                        self.tsa_block = TemporalScaleAdaptiveBlock(in_channels=channels).to(self.device)
+                    
+                    x = self.tsa_block(x)
+                # ===========================
         
         # Global average pooling
         if len(x.shape) == 5:  # [B, C, T, H, W]
@@ -253,7 +305,7 @@ class X3DViolenceDetector(nn.Module):
         """Forward pass"""
         rgb_frames = data['rgb']  # [B, C, T, H, W]
         
-        # Extract X3D features
+        # Extract X3D features (includes TSA block if enabled)
         x3d_features = self._extract_x3d_features(rgb_frames)
         
         # Motion enhancement
@@ -270,10 +322,6 @@ class X3DViolenceDetector(nn.Module):
         logits = self.classifier(combined_features)
         
         return logits
-
-
-# Backward compatibility - alias for any imports using the old name
-OptimizedX3DViolenceDetector = X3DViolenceDetector
 
 
 class StableCrossEntropyLoss(nn.Module):
@@ -297,17 +345,18 @@ def create_model(
     model_name: str = "x3d_m",
     num_classes: int = 2,
     use_motion_enhancement: bool = True,
-    device: str = "auto"
-) -> X3DViolenceDetector:
+    use_temporal_kernel_optimization: bool = True,
+    use_tsa_block: bool = False,
+    device: str = "cuda"
+) -> CleanX3DViolenceDetector:
     """Create clean X3D violence detection model"""
     
-    if device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    model = X3DViolenceDetector(
+    model = CleanX3DViolenceDetector(
         x3d_model_name=model_name,
         num_classes=num_classes,
         use_motion_enhancement=use_motion_enhancement,
+        use_temporal_kernel_optimization=use_temporal_kernel_optimization,
+        use_tsa_block=use_tsa_block,
         dropout_rate=0.15,
         device=device
     )
@@ -317,15 +366,6 @@ def create_model(
     if model_dtype != torch.float32:
         model = model.float()
     
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    
-    print(f"Clean Model: {model_name}")
-    print(f"Total parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
-    print(f"Motion enhancement: {use_motion_enhancement}")
-    
     return model
 
 
@@ -334,9 +374,11 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Testing clean model on device: {device}")
     
+    # Test Config: ENABLE novelty block to verify shape compatibility
     model = create_model(
         model_name="x3d_m",
         use_motion_enhancement=True,
+        use_tsa_block=True, # Enable new block
         device=device
     )
     
@@ -353,6 +395,5 @@ if __name__ == "__main__":
         output = model(dummy_data)
         print(f"Output shape: {output.shape}")
         print(f"Output dtype: {output.dtype}")
-        print(f"Output range: [{output.min().item():.3f}, {output.max().item():.3f}]")
     
     print("\nClean model ready for training!")

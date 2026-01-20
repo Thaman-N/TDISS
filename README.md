@@ -169,7 +169,43 @@ npm run dev
 
 ---
 
+
 ## Training Pipeline
+```
+
+---
+
+## Utility & Research Scripts
+
+```bash
+# 1. Ablation Study Configurations
+python backend/trainingpipeline/ablation_config.py
+# Contains configuration presets for ablation studies (not typically run directly).
+
+# 2. Ablation Sampling Methods
+python backend/trainingpipeline/ablation_sampling.py
+# Implements different frame sampling strategies for ablation studies (not typically run directly).
+
+# 3. Fixed Ablation Study Pipeline
+python backend/trainingpipeline/ablation_study_fixed.py --config <config_name> --dataset_path <path> [other args]
+# Runs a full ablation study experiment with configurable model/dataset settings.
+
+# 4. TensorRT Benchmarking
+python backend/trainingpipeline/benchmark_tensorrt_json.py --model_path <pth> --engine_path <trt> [other args]
+# Benchmarks PyTorch and TensorRT inference speed and memory usage, outputs results as JSON.
+
+# 5. Convert PyTorch Model to TensorRT
+python backend/trainingpipeline/convert_to_tensorrt.py --model_path <pth> --onnx_path <onnx> --engine_path <trt> [other args]
+# Converts a trained PyTorch model to ONNX and then to TensorRT for optimized inference.
+
+# 6. Dataset Frame Duplication Analysis
+python backend/trainingpipeline/dataset_duplication_analysis.py <dataset_path>
+# Analyzes all videos in a dataset for frame duplication and effective FPS, outputs CSV and summary.
+
+# 7. Quick FPS Test
+python backend/trainingpipeline/fps_test.py <video_path>
+# Checks if a video's low FPS is real or due to frame duplication/padding.
+```
 
 ```bash
 # Older GPU architectures (pre-blackwell) may not allow you to use num_workers argument in which case set it to 0 when running the command

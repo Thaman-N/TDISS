@@ -15,7 +15,7 @@ dist/
 *checkpoints/
 uploads/
 results/
-*.db
+*.db*
 .benchmarks/
 .pytest_cache/
 tp*/
@@ -28,7 +28,15 @@ CLAUDE.md
 *_output/
 ignore_*.*
 *_ignore/
+ignore_*/
 diagnostic_*.py
+ablation_*/
+*.txt
+*.csv
+*.mp4
+*.pdf
+*.png
+exported_*/
 
 # System files
 .DS_Store

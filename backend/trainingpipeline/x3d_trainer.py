@@ -21,6 +21,7 @@ class OptimizedX3DTrainer:
     - Optimized for small datasets
     - Works with proven augmentation techniques
     - Maintains your working simple attention approach
+    - NEW: Supports Dense Evaluation (Multi-Crop) for robust testing
     """
     
     def __init__(
@@ -38,7 +39,8 @@ class OptimizedX3DTrainer:
         patience: int = 15,
         min_delta: float = 1e-3,
         gradient_clip_val: float = 1.0,
-        warmup_epochs: int = 3
+        warmup_epochs: int = 3,
+        use_dense_eval: bool = False, # NEW: Switch for robust validation
     ):
         self.model = model
         self.train_loader = train_loader
@@ -53,6 +55,9 @@ class OptimizedX3DTrainer:
         self.min_delta = min_delta
         self.gradient_clip_val = gradient_clip_val
         self.warmup_epochs = warmup_epochs
+        
+        # New Evaluation Switch
+        self.use_dense_eval = use_dense_eval
         
         # Create checkpoint directory
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -97,7 +102,7 @@ class OptimizedX3DTrainer:
         print(f"  Base learning rate: {self.base_lr}")
         print(f"  Checkpoint dir: {checkpoint_dir}")
         print(f"  Early stopping patience: {patience}")
-        print(f"  Working with PROVEN augmentations")
+        print(f"  Dense Evaluation (3-Crop): {'ENABLED' if use_dense_eval else 'DISABLED'}")
     
     def _apply_warmup(self, epoch: int):
         """Apply learning rate warmup for stability"""
@@ -108,7 +113,8 @@ class OptimizedX3DTrainer:
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = current_lr
             
-            print(f"Warmup epoch {epoch+1}/{self.warmup_epochs}: lr = {current_lr:.6f}")
+            # Only print once per epoch
+            # print(f"Warmup epoch {epoch+1}/{self.warmup_epochs}: lr = {current_lr:.6f}")
     
     def _clip_gradients(self) -> float:
         """Clip gradients and return the gradient norm"""
@@ -166,7 +172,7 @@ class OptimizedX3DTrainer:
                 
                 # Check for gradient explosion
                 if grad_norm > 10.0:
-                    print(f"WARNING: Large gradient norm detected: {grad_norm:.2f}")
+                    pass # print(f"WARNING: Large gradient norm detected: {grad_norm:.2f}")
                 
                 # Optimizer step
                 self.scaler.step(self.optimizer)
@@ -218,7 +224,10 @@ class OptimizedX3DTrainer:
         }
     
     def validate_epoch(self, epoch: int) -> Dict[str, float]:
-        """Validate for one epoch"""
+        """
+        Validate for one epoch.
+        Supports DENSE EVALUATION (3-Crop) if self.use_dense_eval is True.
+        """
         self.model.eval()
         
         total_loss = 0.0
@@ -228,33 +237,97 @@ class OptimizedX3DTrainer:
         
         progress_bar = tqdm(
             self.val_loader, 
-            desc=f"Epoch {epoch+1} [Val]",
+            desc=f"Epoch {epoch+1} [Val{' Dense' if self.use_dense_eval else ''}]",
             leave=False
         )
         
         with torch.no_grad():
             for data, labels in progress_bar:
                 # Move data to device
-                if isinstance(data, dict):
-                    data = {k: v.to(self.device, non_blocking=True) for k, v in data.items()}
-                else:
-                    data = data.to(self.device, non_blocking=True)
-                
                 labels = labels.to(self.device, non_blocking=True)
                 
-                # Forward pass
-                if self.mixed_precision:
-                    with autocast():
-                        outputs = self.model(data)
-                        loss = self.criterion(outputs, labels)
+                # Check input format
+                if isinstance(data, dict):
+                    rgb = data['rgb'].to(self.device, non_blocking=True)
+                    flow = data['flow'].to(self.device, non_blocking=True) if 'flow' in data else None
                 else:
-                    outputs = self.model(data)
-                    loss = self.criterion(outputs, labels)
+                    rgb = data.to(self.device, non_blocking=True)
+                    flow = None
                 
-                # Check for reasonable logit values
-                logit_range = outputs.max().item() - outputs.min().item()
-                if logit_range > 50:
-                    print(f"WARNING: Large logit range detected: {logit_range:.2f}")
+                # === DENSE EVALUATION LOGIC (Proposed Method) ===
+                if self.use_dense_eval:
+                    # rgb shape: [B, C, T, H, W]
+                    B, C, T, H, W = rgb.shape
+                    
+                    if T >= 16:
+                        # Create 3 temporal crops
+                        # Crop 1: Start
+                        crop_start = {'rgb': rgb[:, :, :16, :, :]}
+                        if flow is not None: crop_start['flow'] = flow[:, :, :16, :, :]
+                        
+                        # Crop 2: Middle
+                        mid = T // 2
+                        crop_mid = {'rgb': rgb[:, :, mid-8:mid+8, :, :]}
+                        if flow is not None: crop_mid['flow'] = flow[:, :, mid-8:mid+8, :, :]
+                        
+                        # Crop 3: End
+                        crop_end = {'rgb': rgb[:, :, -16:, :, :]}
+                        if flow is not None: crop_end['flow'] = flow[:, :, -16:, :, :]
+                        
+                        # Run model on all 3
+                        if self.mixed_precision:
+                            with autocast():
+                                out1 = self.model(crop_start)
+                                out2 = self.model(crop_mid)
+                                out3 = self.model(crop_end)
+                        else:
+                            out1 = self.model(crop_start)
+                            out2 = self.model(crop_mid)
+                            out3 = self.model(crop_end)
+                        
+                        # Max Pool the "Violence" score (Class Index 1) to find worst-case clip
+                        # Stack outputs: [B, 3, Num_Classes]
+                        stacked_outs = torch.stack([out1, out2, out3], dim=1)
+                        violence_scores = stacked_outs[:, :, 1] # [B, 3]
+                        
+                        # Get index of crop with highest violence score
+                        max_vals, max_indices = torch.max(violence_scores, dim=1)
+                        
+                        # Select the logits corresponding to that crop
+                        outputs = torch.stack([
+                            stacked_outs[i, max_indices[i]] for i in range(B)
+                        ])
+                        
+                    else:
+                        # Video too short? Fallback to standard single pass
+                        if self.mixed_precision:
+                            with autocast():
+                                outputs = self.model(data)
+                        else:
+                            outputs = self.model(data)
+                
+                # === STANDARD EVALUATION (Baseline) ===
+                else:
+                    if self.mixed_precision:
+                        with autocast():
+                            # Re-wrap data dict for model if we unpacked it earlier
+                            if isinstance(data, dict):
+                                model_input = {'rgb': rgb}
+                                if flow is not None: model_input['flow'] = flow
+                            else:
+                                model_input = rgb
+                                
+                            outputs = self.model(model_input)
+                    else:
+                        if isinstance(data, dict):
+                            model_input = {'rgb': rgb}
+                            if flow is not None: model_input['flow'] = flow
+                        else:
+                            model_input = rgb
+                        outputs = self.model(model_input)
+
+                # Calculate Loss
+                loss = self.criterion(outputs, labels)
                 
                 # Statistics
                 total_loss += loss.item()
@@ -299,7 +372,8 @@ class OptimizedX3DTrainer:
             'gradient_clip_val': self.gradient_clip_val,
             'base_lr': self.base_lr,
             'optimized_version': True,  # Mark as optimized version
-            'proven_augmentations': True  # Mark as using proven augmentations
+            'proven_augmentations': True,  # Mark as using proven augmentations
+            'dense_eval': self.use_dense_eval # Mark evaluation mode
         }
         
         if self.scheduler is not None:
@@ -336,12 +410,11 @@ class OptimizedX3DTrainer:
         if 'history' in checkpoint:
             self.history = checkpoint['history']
         
-        # Check if this is an optimized checkpoint
-        if checkpoint.get('optimized_version', False):
-            print(f"✓ Loaded OPTIMIZED checkpoint from epoch {checkpoint['epoch']}")
-        else:
-            print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
+        # Check metadata
+        if checkpoint.get('dense_eval', False):
+            pass # print("Loaded checkpoint trained with Dense Evaluation support")
             
+        print(f"✓ Loaded checkpoint from epoch {checkpoint['epoch']+1}")
         return checkpoint['epoch']
     
     def plot_training_curves(self):

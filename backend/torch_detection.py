@@ -6,7 +6,7 @@ import torch
 from pathlib import Path
 
 # Import the model definition
-from model import X3DViolenceDetector, create_model
+from model import CleanX3DViolenceDetector, create_model
 
 # Constants for X3D model - MATCH TRAINING SETTINGS
 NUM_FRAMES = 16       # X3D works with 16 frames
@@ -69,13 +69,14 @@ def load_violence_detection_model(model_path, device=None):
         print(f"Creating model with architecture: {model_name}")
         
         # Create model instance with matching architecture - UPDATED FOR CLEAN MODEL
-        model = X3DViolenceDetector(
+        model = CleanX3DViolenceDetector(
             x3d_model_name=model_name,
             num_classes=2,
             use_motion_enhancement=True,  # Match training
+            use_temporal_kernel_optimization=True,
+            use_tsa_block=False,
             dropout_rate=0.15,  # Match clean model default (was 0.2 in old version)
             device=device.type   # Pass the detected device type
-            # Removed motion_weight parameter - doesn't exist in clean model
         )
         
         # Load state dict
