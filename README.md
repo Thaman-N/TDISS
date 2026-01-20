@@ -38,6 +38,7 @@
   - [Features](#features)
   - [Benchmark](#benchmark)
   - [Quick Start](#quick-start)
+  - [Utility \& Research Scripts](#utility--research-scripts)
   - [Training Pipeline](#training-pipeline)
   - [Running Tests](#running-tests)
   - [Project Structure](#project-structure)
@@ -169,12 +170,6 @@ npm run dev
 
 ---
 
-
-## Training Pipeline
-```
-
----
-
 ## Utility & Research Scripts
 
 ```bash
@@ -206,6 +201,8 @@ python backend/trainingpipeline/dataset_duplication_analysis.py <dataset_path>
 python backend/trainingpipeline/fps_test.py <video_path>
 # Checks if a video's low FPS is real or due to frame duplication/padding.
 ```
+
+## Training Pipeline
 
 ```bash
 # Older GPU architectures (pre-blackwell) may not allow you to use num_workers argument in which case set it to 0 when running the command
